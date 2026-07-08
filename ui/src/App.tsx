@@ -8,6 +8,7 @@ import {
   ChannelStatus,
   EnrichSummary,
   ExpandAllSeedsSummary,
+  OutreachStatus,
   RawChannelRow,
   ScoutApi,
   SearchRecord,
@@ -19,7 +20,7 @@ import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, MOVER_CONFIG, REACH_CONFIG } from "./config";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "rejected";
-type Tab = StageTab | "seeds" | "brands";
+type Tab = StageTab | "outreach" | "seeds" | "brands";
 type SortMode = "score" | "growth" | "subs_desc" | "subs_asc";
 type GateState = "idle" | "checking" | "denied" | "success" | "cooldown";
 type ToastState = {
@@ -40,7 +41,8 @@ const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
 const KIND_OPTIONS: ChannelKind[] = ["creator", "brand"];
 const ALL_KIND_OPTIONS: ChannelKind[] = ["creator", "brand", "alt"];
-const TABS: Tab[] = ["pool", "shortlist", "watchlist", "seeds", "rejected", "brands"];
+const TABS: Tab[] = ["pool", "shortlist", "outreach", "watchlist", "seeds", "rejected", "brands"];
+const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "signed", "passed", "ghosted"];
 
 export function App() {
   const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SESSION_KEY));
@@ -192,6 +194,14 @@ export function App() {
               window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
               setTab("pool");
             }}
+          />
+        )}
+        {adminKey && tab === "outreach" && (
+          <OutreachView
+            api={api}
+            onError={showError}
+            onToast={setToast}
+            onChanged={refreshStatus}
           />
         )}
         {adminKey && tab === "brands" && (
@@ -369,6 +379,7 @@ function StageView({
   const [deepVariants, setDeepVariants] = useState<string[]>([]);
   const [recentOpen, setRecentOpen] = useState(false);
   const [highlightIds, setHighlightIds] = useState<Set<string>>(() => new Set());
+  const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
   const showPoolFilters = stage === "pool";
 
   useEffect(() => {
@@ -518,6 +529,33 @@ function StageView({
     } catch (error) {
       onError(error);
       await load();
+    }
+  }
+
+  async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
+    if (!outreachChannel) return;
+    const channel = outreachChannel;
+    try {
+      await api.logOutreach(channel.channel_id, body);
+      setOutreachChannel(null);
+      await load();
+      onChanged();
+      if (body.outreach_status === "signed" && !channel.is_seed) {
+        onToast({
+          message: `${channel.title ?? "Channel"} marked signed.`,
+          actionLabel: "Promote to seed",
+          onAction: () => {
+            void api.patchChannel(channel.channel_id, { is_seed: true })
+              .then(load)
+              .then(onChanged)
+              .catch(onError);
+          },
+        });
+      } else {
+        onToast({ message: `${channel.title ?? "Channel"} outreach logged.` });
+      }
+    } catch (error) {
+      onError(error);
     }
   }
 
@@ -840,10 +878,155 @@ function StageView({
               onRestoreToPool={stage === "rejected" ? () => void patchStatus(channel, "candidate", "candidate") : undefined}
               onToggleKind={stage !== "rejected" ? () => void toggleKind(channel) : undefined}
               onEnrich={stage === "pool" || stage === "watchlist" ? () => void enrichCard(channel) : undefined}
+              onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
               highlighted={highlightIds.has(channel.channel_id)}
             />
           ))}
         </div>
+      )}
+      {outreachChannel && (
+        <OutreachDialog
+          channel={outreachChannel}
+          onClose={() => setOutreachChannel(null)}
+          onSubmit={(body) => void handleOutreachLog(body)}
+        />
+      )}
+    </section>
+  );
+}
+
+function OutreachView({
+  api,
+  onError,
+  onToast,
+  onChanged,
+}: {
+  api: ScoutApi;
+  onError: (error: unknown) => void;
+  onToast: (toast: ToastState) => void;
+  onChanged: () => void;
+}) {
+  const [active, setActive] = useState<ChannelCardRow[]>([]);
+  const [closed, setClosed] = useState<ChannelCardRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await api.getOutreach();
+      setActive(result.active);
+      setClosed(result.closed);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, onError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function patchStatus(channel: ChannelCardRow, status: ChannelStatus, message: string) {
+    try {
+      await api.patchChannel(channel.channel_id, { status });
+      await load();
+      onChanged();
+      onToast({ message });
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function toggleSeed(channel: ChannelCardRow) {
+    const nextSeedState = !channel.is_seed;
+    try {
+      await api.patchChannel(channel.channel_id, { is_seed: nextSeedState });
+      await load();
+      onChanged();
+      onToast({ message: `${channel.title ?? "Channel"} ${nextSeedState ? "added to" : "removed from"} seeds.` });
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
+    if (!outreachChannel) return;
+    const channel = outreachChannel;
+    try {
+      await api.logOutreach(channel.channel_id, body);
+      setOutreachChannel(null);
+      await load();
+      onChanged();
+      if (body.outreach_status === "signed" && !channel.is_seed) {
+        onToast({
+          message: `${channel.title ?? "Channel"} marked signed.`,
+          actionLabel: "Promote to seed",
+          onAction: () => {
+            void api.patchChannel(channel.channel_id, { is_seed: true })
+              .then(load)
+              .then(onChanged)
+              .catch(onError);
+          },
+        });
+      } else {
+        onToast({ message: `${channel.title ?? "Channel"} outreach logged.` });
+      }
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  return (
+    <section className="view">
+      <div className="stage-heading clipped">
+        <strong>Outreach</strong>
+        <span>Follow-ups and live conversations, sorted by the next touch.</span>
+      </div>
+      {loading ? <Loading /> : active.length === 0 ? (
+        <EmptyState title="No active outreach" detail="Log outreach from a Shortlist card to start follow-up tracking." />
+      ) : (
+        <div className="card-grid">
+          {active.map((channel) => (
+            <ChannelCard
+              key={channel.channel_id}
+              channel={channel}
+              showStatus
+              overdue={isOverdue(channel.next_followup_at)}
+              onLogOutreach={() => setOutreachChannel(channel)}
+              onShortlist={channel.status !== "shortlisted" ? () => void patchStatus(channel, "shortlisted", `${channel.title ?? "Channel"} shortlisted.`) : undefined}
+              onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
+              onBackToPool={channel.status !== "candidate" ? () => void patchStatus(channel, "candidate", `${channel.title ?? "Channel"} returned to Pool.`) : undefined}
+              onToggleSeed={() => void toggleSeed(channel)}
+            />
+          ))}
+        </div>
+      )}
+      <details className="closed-section clipped">
+        <summary>Closed ({closed.length})</summary>
+        {closed.length === 0 ? (
+          <EmptyState title="No closed outreach" detail="Signed and passed channels will collect here." />
+        ) : (
+          <div className="card-grid">
+            {closed.map((channel) => (
+              <ChannelCard
+                key={channel.channel_id}
+                channel={channel}
+                showStatus
+                onLogOutreach={() => setOutreachChannel(channel)}
+                onToggleSeed={channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
+              />
+            ))}
+          </div>
+        )}
+      </details>
+      {outreachChannel && (
+        <OutreachDialog
+          channel={outreachChannel}
+          onClose={() => setOutreachChannel(null)}
+          onSubmit={(body) => void handleOutreachLog(body)}
+        />
       )}
     </section>
   );
@@ -1344,7 +1527,9 @@ function ChannelCard({
   onRestoreToPool,
   onToggleKind,
   onEnrich,
+  onLogOutreach,
   highlighted = false,
+  overdue = false,
 }: {
   channel: ChannelCardRow;
   showStatus?: boolean;
@@ -1356,11 +1541,13 @@ function ChannelCard({
   onRestoreToPool?: () => void;
   onToggleKind?: () => void;
   onEnrich?: () => void;
+  onLogOutreach?: () => void;
   highlighted?: boolean;
+  overdue?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""}`}>
+    <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${overdue ? "overdue-card" : ""}`}>
       <div className="card-head">
         <ChannelImage
           src={channel.thumbnail_url}
@@ -1400,6 +1587,10 @@ function ChannelCard({
         )}
         {hotChannel(channel) && <span className="chip hot-chip">HOT</span>}
         {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
+        {overdue && <span className="chip overdue-chip">OVERDUE</span>}
+        {channel.outreach_status && channel.outreach_status !== "none" && (
+          <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
+        )}
       </div>
       <GrowthChips row={channel} />
       <Sparkline points={channel.snapshots ?? []} />
@@ -1409,12 +1600,14 @@ function ChannelCard({
         {channel.mention_count > 0 && <span>mentions: {channel.mention_count}</span>}
         {channel.kind_reason && channel.status === "rejected" && <span>{channel.kind_reason}</span>}
         {channel.last_upload_at && <span>last upload {daysAgo(channel.last_upload_at)}d ago</span>}
+        {channel.next_followup_at && <span>follow up {shortDate(channel.next_followup_at)}</span>}
       </div>
       <IconLinks links={channel.contact_links} />
       {open && <ScoreTable breakdown={channel.score_breakdown} />}
-      {(onShortlist || onReject || onToggleSeed || onWatchlist || onBackToPool || onRestoreToPool || onEnrich) && (
+      {(onShortlist || onReject || onToggleSeed || onWatchlist || onBackToPool || onRestoreToPool || onEnrich || onLogOutreach) && (
         <div className="card-actions">
           {onShortlist && <button onClick={onShortlist}>Shortlist</button>}
+          {onLogOutreach && <button onClick={onLogOutreach}>Log outreach</button>}
           {onWatchlist && <button onClick={onWatchlist}>Eyes Peeled</button>}
           {onReject && <button onClick={onReject}>Reject</button>}
           {onToggleSeed && (
@@ -1431,6 +1624,69 @@ function ChannelCard({
         </div>
       )}
     </article>
+  );
+}
+
+function OutreachDialog({
+  channel,
+  onClose,
+  onSubmit,
+}: {
+  channel: ChannelCardRow;
+  onClose: () => void;
+  onSubmit: (body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) => void;
+}) {
+  const [outreachStatus, setOutreachStatus] = useState<OutreachStatus>(
+    channel.outreach_status && channel.outreach_status !== "none" ? channel.outreach_status : "sent",
+  );
+  const [note, setNote] = useState("");
+  const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : daysFromNowInput(7));
+  const closed = outreachStatus === "signed" || outreachStatus === "passed";
+
+  useEffect(() => {
+    if (closed) setNextFollowup("");
+  }, [closed]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="dialog clipped outreach-dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit({
+            outreach_status: outreachStatus,
+            note,
+            next_followup_at: nextFollowup || null,
+          });
+        }}
+      >
+        <h2>Log outreach</h2>
+        <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+        <label>
+          Status
+          <select value={outreachStatus} onChange={(event) => setOutreachStatus(event.target.value as OutreachStatus)}>
+            {OUTREACH_OPTIONS.map((option) => (
+              <option key={option} value={option}>{outreachLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Note
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="sent intro, replied with rates, follow-up context..." required />
+        </label>
+        <label>
+          Next follow-up
+          <input type="date" value={nextFollowup} onChange={(event) => setNextFollowup(event.target.value)} disabled={closed} />
+        </label>
+        {outreachStatus === "signed" && !channel.is_seed && (
+          <p className="dialog-hint">Signed channels will offer a one-click seed prompt after logging.</p>
+        )}
+        <div className="dialog-actions">
+          <button className="primary" type="submit" disabled={!note.trim()}>Save log</button>
+          <button type="button" onClick={onClose}>Cancel</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -2055,6 +2311,7 @@ function tabCount(tab: Tab, status: StatusPayload | null): number | null {
   if (!status) return null;
   if (tab === "pool") return status.channel_counts.pool ?? 0;
   if (tab === "shortlist") return status.channel_counts.by_status.shortlisted ?? 0;
+  if (tab === "outreach") return status.channel_counts.outreach_active ?? 0;
   if (tab === "watchlist") return status.channel_counts.by_status.watchlist ?? 0;
   if (tab === "seeds") return status.channel_counts.seeds ?? 0;
   if (tab === "rejected") return status.channel_counts.by_status.rejected ?? 0;
@@ -2145,6 +2402,18 @@ function compact(value: number | null | undefined): string {
 
 function shortDate(value: string): string {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
+}
+
+function dateInputValue(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10);
+}
+
+function daysFromNowInput(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function shortDateTime(value: string): string {
@@ -2280,6 +2549,20 @@ function daysAgo(value: string): number {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return Number.POSITIVE_INFINITY;
   return Math.max(0, Math.round((Date.now() - date.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+function isOverdue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const due = new Date(value);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
+
+function outreachLabel(value: OutreachStatus): string {
+  return value.replace(/_/g, " ");
 }
 
 function hotChannel(channel: ChannelCardRow): boolean {

@@ -1,5 +1,6 @@
 export type ChannelKind = "creator" | "brand" | "alt";
 export type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "rejected";
+export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 export type DiscoverySource = "mention" | "collab" | "search";
 
 export interface ContactLink {
@@ -21,6 +22,10 @@ export interface ChannelCardRow {
   kind_reason: string | null;
   discovered_via: string;
   status: ChannelStatus;
+  outreach_status: OutreachStatus;
+  contacted_at: string | null;
+  last_touch_at: string | null;
+  next_followup_at: string | null;
   source_seed_title: string | null;
   search_query: string | null;
   mention_count: number;
@@ -62,6 +67,10 @@ export interface RawChannelRow {
   subscriber_count: number | null;
   created_at: string;
   status: ChannelStatus;
+  outreach_status?: OutreachStatus;
+  contacted_at?: string | null;
+  last_touch_at?: string | null;
+  next_followup_at?: string | null;
   kind: ChannelKind;
   kind_reason: string | null;
   yield_count?: number;
@@ -159,6 +168,8 @@ export interface StatusPayload {
     by_kind: Record<string, number>;
     pool: number;
     seeds: number;
+    outreach_active: number;
+    outreach_closed: number;
   };
   last_search: SearchRecord | null;
   last_snapshot_run: SnapshotJob | null;
@@ -240,6 +251,10 @@ export class ScoutApi {
     return this.request<{ channels: ChannelCardRow[] }>(`/api/shortlist?${query(params)}`);
   }
 
+  getOutreach() {
+    return this.request<{ active: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
+  }
+
   listChannels(status: ChannelStatus | "seed") {
     return this.request<{ channels: RawChannelRow[] }>(`/api/channels?status=${status}`);
   }
@@ -263,6 +278,16 @@ export class ScoutApi {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+  }
+
+  logOutreach(channelId: string, body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
+    return this.request<{ channel: RawChannelRow; log: Array<{ id: number; channel_id: string; created_at: string; note: string }> }>(
+      `/api/channels/${encodeURIComponent(channelId)}/outreach`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
   }
 
   runSearch(body: {

@@ -49,6 +49,7 @@ import { planSnapshotRun, SNAPSHOT_CONFIG, SnapshotTargetState } from "./lib/sna
 import { sanitizedContactLinks } from "./lib/links";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "rejected";
+type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
 type ShortlistDiscoveryFilter = "mention" | "collab" | "search";
 type ShortlistStatusFilter = ChannelStatus | "all";
@@ -61,6 +62,16 @@ const VALID_STATUSES = new Set<ChannelStatus>([
   "shortlisted",
   "watchlist",
   "rejected",
+]);
+
+const VALID_OUTREACH_STATUSES = new Set<OutreachStatus>([
+  "none",
+  "sent",
+  "replied",
+  "in_talks",
+  "signed",
+  "passed",
+  "ghosted",
 ]);
 
 const CONTENT_SECURITY_POLICY = [
@@ -88,6 +99,7 @@ export default {
       const url = new URL(request.url);
       const expandMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/expand$/);
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
+      const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
 
       if (url.pathname === "/api/seeds" && request.method === "POST") {
         const auth = await requireAdmin(request, env);
@@ -189,6 +201,18 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return brands(env);
+      }
+
+      if (url.pathname === "/api/outreach" && request.method === "GET") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return outreach(env);
+      }
+
+      if (outreachChannelMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
       }
 
       if (patchChannelMatch && request.method === "PATCH") {
@@ -447,6 +471,71 @@ async function patchChannel(
   return json(await getChannel(env, channelId));
 }
 
+async function logOutreach(
+  channelId: string,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const existing = await env.SCOUT_DB.prepare(
+    "SELECT * FROM channels WHERE channel_id = ?",
+  )
+    .bind(channelId)
+    .first<ChannelRow>();
+  if (!existing) return json({ error: "Channel not found" }, 404);
+
+  const body = await parseJson<{
+    outreach_status?: unknown;
+    note?: unknown;
+    next_followup_at?: unknown;
+  }>(request);
+  if (!VALID_OUTREACH_STATUSES.has(body.outreach_status as OutreachStatus)) {
+    return json({ error: "Invalid outreach_status" }, 400);
+  }
+  if (typeof body.note !== "string" || body.note.trim().length === 0) {
+    return json({ error: "note is required" }, 400);
+  }
+
+  const nextFollowup =
+    body.next_followup_at === null || body.next_followup_at === ""
+      ? null
+      : typeof body.next_followup_at === "string"
+        ? body.next_followup_at
+        : undefined;
+  if (nextFollowup === undefined) {
+    return json({ error: "next_followup_at must be a string or null" }, 400);
+  }
+  if (nextFollowup !== null && Number.isNaN(Date.parse(nextFollowup))) {
+    return json({ error: "next_followup_at must be a parseable date" }, 400);
+  }
+
+  const nextStatus = body.outreach_status as OutreachStatus;
+  const contactedExpression =
+    nextStatus === "none"
+      ? "contacted_at"
+      : "COALESCE(contacted_at, CURRENT_TIMESTAMP)";
+
+  await env.SCOUT_DB.batch([
+    env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET outreach_status = ?,
+        contacted_at = ${contactedExpression},
+        last_touch_at = CURRENT_TIMESTAMP,
+        next_followup_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(nextStatus, nextFollowup, channelId),
+    env.SCOUT_DB.prepare(
+      `INSERT INTO outreach_log (channel_id, note)
+      VALUES (?, ?)`,
+    ).bind(channelId, body.note.trim().slice(0, 2000)),
+  ]);
+
+  return json({
+    channel: await getChannel(env, channelId),
+    log: await outreachLog(env, channelId),
+  });
+}
+
 async function shortlist(url: URL, env: Env): Promise<Response> {
   const minScore = parseNumberParam(url.searchParams.get("min_score"), 0, 0, 100);
   const kinds = parseKindList(url.searchParams.get("kind"));
@@ -498,6 +587,62 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
   return json({
     channels: results.map((row) => channelSummary(row, growth.get(row.channel_id))),
   });
+}
+
+async function outreach(env: Env): Promise<Response> {
+  const active = await outreachRows(env, false);
+  const closed = await outreachRows(env, true);
+  const growth = await growthMapForChannels(
+    env,
+    [...active, ...closed].map((row) => row.channel_id),
+  );
+
+  return json({
+    active: active.map((row) => channelSummary(row, growth.get(row.channel_id))),
+    closed: closed.map((row) => channelSummary(row, growth.get(row.channel_id))),
+  });
+}
+
+async function outreachRows(
+  env: Env,
+  closed: boolean,
+): Promise<Array<ChannelRow & { source_seed_title: string | null }>> {
+  const clause = closed
+    ? "c.outreach_status IN ('signed', 'passed')"
+    : "c.outreach_status NOT IN ('none', 'signed', 'passed')";
+  const order = closed
+    ? "c.last_touch_at DESC, c.updated_at DESC"
+    : `CASE
+        WHEN c.next_followup_at IS NOT NULL AND date(c.next_followup_at) < date('now') THEN 0
+        WHEN c.next_followup_at IS NOT NULL THEN 1
+        ELSE 2
+      END,
+      c.next_followup_at ASC,
+      c.last_touch_at ASC`;
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT c.*, s.title AS source_seed_title
+    FROM channels c
+    LEFT JOIN channels s ON c.source_channel_id = s.channel_id
+    WHERE ${clause}
+    ORDER BY ${order}
+    LIMIT 200`,
+  ).all<ChannelRow & { source_seed_title: string | null }>();
+
+  return results;
+}
+
+async function outreachLog(env: Env, channelId: string): Promise<unknown[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT id, channel_id, created_at, note
+    FROM outreach_log
+    WHERE channel_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 25`,
+  )
+    .bind(channelId)
+    .all();
+
+  return results;
 }
 
 async function brands(env: Env): Promise<Response> {
@@ -1732,6 +1877,12 @@ async function status(env: Env): Promise<Response> {
   const poolCount = await env.SCOUT_DB.prepare(
     "SELECT COUNT(*) AS count FROM channels WHERE status = 'candidate' AND is_seed = 0 AND kind = 'creator'",
   ).first<{ count: number }>();
+  const outreachActiveCount = await env.SCOUT_DB.prepare(
+    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status NOT IN ('none', 'signed', 'passed')",
+  ).first<{ count: number }>();
+  const outreachClosedCount = await env.SCOUT_DB.prepare(
+    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('signed', 'passed')",
+  ).first<{ count: number }>();
   const lastSearch = await env.SCOUT_DB.prepare(
     `SELECT id, query, pages_used, refs_found, resolved, credits_spent, created_at
     FROM searches
@@ -1759,6 +1910,8 @@ async function status(env: Env): Promise<Response> {
       by_kind: countMap(byKind.results, "kind"),
       pool: Number(poolCount?.count ?? 0),
       seeds: Number(seedCount?.count ?? 0),
+      outreach_active: Number(outreachActiveCount?.count ?? 0),
+      outreach_closed: Number(outreachClosedCount?.count ?? 0),
     },
     last_search: lastSearch ?? null,
     last_snapshot_run: lastSnapshotRun ?? null,
@@ -1969,6 +2122,10 @@ interface ChannelRow {
   source_channel_id: string | null;
   search_query: string | null;
   status: ChannelStatus;
+  outreach_status: OutreachStatus;
+  contacted_at: string | null;
+  last_touch_at: string | null;
+  next_followup_at: string | null;
   raw_json: string;
   mention_count: number;
   kind: ChannelKind;
@@ -2606,6 +2763,10 @@ function channelSummary(
     kind_reason: row.kind_reason,
     discovered_via: row.discovered_via,
     status: row.status,
+    outreach_status: row.outreach_status ?? "none",
+    contacted_at: row.contacted_at ?? null,
+    last_touch_at: row.last_touch_at ?? null,
+    next_followup_at: row.next_followup_at ?? null,
     source_seed_title: row.source_seed_title,
     search_query: row.search_query,
     mention_count: row.mention_count,

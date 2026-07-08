@@ -303,12 +303,52 @@ a:hover {
 }
 
 .discovery-console .toggle-label {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  background: rgba(10, 18, 32, 0.72);
+  color: #bff6ff;
   white-space: nowrap;
+  clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+}
+
+.discovery-console .toggle-label input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  background: #07111f;
+  display: inline-grid;
+  place-items: center;
+  clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 0 100%);
+}
+
+.discovery-console .toggle-label input::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  background: transparent;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+
+.discovery-console .toggle-label input:checked {
+  border-color: #22d3ee;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.18);
+}
+
+.discovery-console .toggle-label input:checked::after {
+  background: #22d3ee;
 }
 
 .discovery-console .cost {
-  flex: 0 1 230px;
+  flex: 1 1 210px;
+  min-width: 180px;
   min-height: 38px;
   display: inline-flex;
   align-items: center;
@@ -535,6 +575,53 @@ a:hover {
   padding-top: 4px;
 }
 
+.primary-action {
+  color: #07111f;
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+
+.action-overflow {
+  position: relative;
+}
+
+.action-overflow summary {
+  list-style: none;
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  height: 34px;
+  border: 1px solid rgba(34, 211, 238, 0.24);
+  background: #0a1220;
+  color: #bff6ff;
+  cursor: pointer;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+
+.action-overflow summary::-webkit-details-marker {
+  display: none;
+}
+
+.overflow-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  z-index: 10;
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  padding: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.34);
+  background: #07111f;
+  box-shadow: 0 0 22px rgba(34, 211, 238, 0.14);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.overflow-list button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .active-action {
   color: #07111f;
   background: #22d3ee;
@@ -543,15 +630,6 @@ a:hover {
 .status-chip {
   border-color: rgba(34, 211, 238, 0.42);
   color: #67e8f9;
-}
-
-.kind-toggle {
-  min-height: 0;
-  cursor: pointer;
-}
-
-.kind-toggle:disabled {
-  cursor: default;
 }
 
 .kind-brand {

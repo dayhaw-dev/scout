@@ -545,6 +545,7 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
   const discoveredVia = parseDiscoveryFilter(url.searchParams.get("discovered_via"));
   const statusFilter = parseShortlistStatusFilter(url.searchParams.get("status"));
   const seedFilter = parseShortlistSeedFilter(url.searchParams.get("is_seed"));
+  const outreachFilter = parseOutreachStatusFilter(url.searchParams.get("outreach_status"));
   const includeUnscored = parseBooleanParam(url.searchParams.get("include_unscored"), false);
   if (minSubs !== null && maxSubs !== null && minSubs > maxSubs) {
     return json({ error: "min_subs must be less than or equal to max_subs" }, 400);
@@ -564,6 +565,7 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       AND (? IS NULL OR c.subscriber_count >= ?)
       AND (? IS NULL OR c.subscriber_count <= ?)
       AND (? IS NULL OR c.discovered_via = ?)
+      AND (? IS NULL OR c.outreach_status = ?)
     ORDER BY c.score DESC, c.subscriber_count ASC
     LIMIT ?`,
   )
@@ -578,6 +580,8 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       maxSubs,
       discoveredVia,
       discoveredVia,
+      outreachFilter,
+      outreachFilter,
       limit,
     )
     .all<ChannelRow & { source_seed_title: string | null }>();
@@ -608,8 +612,8 @@ async function outreachRows(
   closed: boolean,
 ): Promise<Array<ChannelRow & { source_seed_title: string | null }>> {
   const clause = closed
-    ? "c.outreach_status IN ('signed', 'passed')"
-    : "c.outreach_status NOT IN ('none', 'signed', 'passed')";
+    ? "c.outreach_status IN ('signed', 'passed', 'ghosted')"
+    : "c.outreach_status IN ('sent', 'replied', 'in_talks')";
   const order = closed
     ? "c.last_touch_at DESC, c.updated_at DESC"
     : `CASE WHEN c.last_touch_at IS NULL THEN 1 ELSE 0 END,
@@ -1873,11 +1877,14 @@ async function status(env: Env): Promise<Response> {
   const poolCount = await env.SCOUT_DB.prepare(
     "SELECT COUNT(*) AS count FROM channels WHERE status = 'candidate' AND is_seed = 0 AND kind = 'creator'",
   ).first<{ count: number }>();
+  const shortlistCount = await env.SCOUT_DB.prepare(
+    "SELECT COUNT(*) AS count FROM channels WHERE status = 'shortlisted' AND outreach_status = 'none'",
+  ).first<{ count: number }>();
   const outreachActiveCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status NOT IN ('none', 'signed', 'passed')",
+    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('sent', 'replied', 'in_talks')",
   ).first<{ count: number }>();
   const outreachClosedCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('signed', 'passed')",
+    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('signed', 'passed', 'ghosted')",
   ).first<{ count: number }>();
   const lastSearch = await env.SCOUT_DB.prepare(
     `SELECT id, query, pages_used, refs_found, resolved, credits_spent, created_at
@@ -1905,6 +1912,7 @@ async function status(env: Env): Promise<Response> {
       by_status: countMap(byStatus.results, "status"),
       by_kind: countMap(byKind.results, "kind"),
       pool: Number(poolCount?.count ?? 0),
+      shortlist: Number(shortlistCount?.count ?? 0),
       seeds: Number(seedCount?.count ?? 0),
       outreach_active: Number(outreachActiveCount?.count ?? 0),
       outreach_closed: Number(outreachClosedCount?.count ?? 0),
@@ -2895,6 +2903,12 @@ function parseShortlistStatusFilter(value: string | null): ShortlistStatusFilter
   if (value === "all") return value;
   if (VALID_STATUSES.has(value as ChannelStatus)) return value as ChannelStatus;
   throw new ResponseError("status must be candidate, shortlisted, watchlist, rejected, or all.", 400);
+}
+
+function parseOutreachStatusFilter(value: string | null): OutreachStatus | null {
+  if (value === null || value === "") return null;
+  if (VALID_OUTREACH_STATUSES.has(value as OutreachStatus)) return value as OutreachStatus;
+  throw new ResponseError("outreach_status must be a valid outreach status.", 400);
 }
 
 function parseShortlistSeedFilter(value: string | null): StageSeedFilter {

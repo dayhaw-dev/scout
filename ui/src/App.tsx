@@ -298,7 +298,7 @@ function StatusStrip({ status, live }: { status: StatusPayload | null; live: boo
   const [pulse, setPulse] = useState(false);
   const [lastCredits, setLastCredits] = useState<number | null>(status?.credits_remaining ?? null);
   const pool = status?.channel_counts.pool ?? 0;
-  const shortlisted = status?.channel_counts.by_status.shortlisted ?? 0;
+  const shortlisted = status?.channel_counts.shortlist ?? 0;
   const watchlist = status?.channel_counts.by_status.watchlist ?? 0;
   const creditsAsOf = status?.credits_remaining_updated_at ?? null;
   const lastRun = status?.last_run ?? null;
@@ -415,6 +415,7 @@ function StageView({
         kind: showPoolFilters ? kinds.join(",") : ALL_KIND_OPTIONS.join(","),
         discovered_via: showPoolFilters && source !== "all" ? source : null,
         status: stageStatus,
+        outreach_status: stage === "shortlist" ? "none" : null,
         is_seed: stage === "pool" ? 0 : null,
         include_unscored: stage === "pool" ? 0 : 1,
         limit: 100,
@@ -879,6 +880,7 @@ function StageView({
               onToggleKind={stage !== "rejected" ? () => void toggleKind(channel) : undefined}
               onEnrich={stage === "pool" || stage === "watchlist" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
+              tab={stage}
               highlighted={highlightIds.has(channel.channel_id)}
             />
           ))}
@@ -982,7 +984,7 @@ function OutreachView({
     <section className="view">
       <div className="stage-heading clipped">
         <strong>Outreach</strong>
-        <span>Follow-ups and live conversations, sorted by the next touch.</span>
+        <span>Live conversations sorted by the stalest touch first.</span>
       </div>
       {loading ? <Loading /> : active.length === 0 ? (
         <EmptyState title="No active outreach" detail="Log outreach from a Shortlist card to start follow-up tracking." />
@@ -999,6 +1001,7 @@ function OutreachView({
               onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
               onBackToPool={channel.status !== "candidate" ? () => void patchStatus(channel, "candidate", `${channel.title ?? "Channel"} returned to Pool.`) : undefined}
               onToggleSeed={() => void toggleSeed(channel)}
+              tab="outreach"
             />
           ))}
         </div>
@@ -1006,7 +1009,7 @@ function OutreachView({
       <details className="closed-section clipped">
         <summary>Closed ({closed.length})</summary>
         {closed.length === 0 ? (
-          <EmptyState title="No closed outreach" detail="Signed and passed channels will collect here." />
+          <EmptyState title="No closed outreach" detail="Signed, passed, and ghosted channels will collect here." />
         ) : (
           <div className="card-grid">
             {closed.map((channel) => (
@@ -1016,6 +1019,7 @@ function OutreachView({
                 showStatus
                 onLogOutreach={() => setOutreachChannel(channel)}
                 onToggleSeed={channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
+                tab="outreach"
               />
             ))}
           </div>
@@ -1424,6 +1428,7 @@ function SearchView({
               onReject={() => void actOnCandidate(channel, { status: "rejected" }, `${channel.title ?? "Channel"} rejected.`)}
               onToggleSeed={() => void actOnCandidate(channel, { is_seed: true }, `${channel.title ?? "Channel"} added to seeds.`)}
               onToggleKind={() => void toggleKind(channel)}
+              tab="pool"
             />
           ))}
         </div>
@@ -1528,6 +1533,7 @@ function ChannelCard({
   onToggleKind,
   onEnrich,
   onLogOutreach,
+  tab,
   highlighted = false,
   stale = false,
 }: {
@@ -1542,10 +1548,29 @@ function ChannelCard({
   onToggleKind?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
+  tab?: Tab;
   highlighted?: boolean;
   stale?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const actions = cardActions({
+    channel,
+    tab,
+    onShortlist,
+    onReject,
+    onToggleSeed,
+    onWatchlist,
+    onBackToPool,
+    onRestoreToPool,
+    onToggleKind,
+    onEnrich,
+    onLogOutreach,
+  });
+  const primaryAction = actions.find((action) => action.primary);
+  const overflowActions = actions.filter((action) => !action.primary);
+  const provenance = provenanceText(channel);
+  const statusVisible = showStatus && !statusRedundantForTab(tab, channel.status);
+
   return (
     <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
       <div className="card-head">
@@ -1570,16 +1595,10 @@ function ChannelCard({
       </div>
       <div className="card-metrics">
         <span>{compact(channel.subscriber_count)} subs</span>
-        <button
-          className={`chip kind-toggle kind-${channel.kind}`}
-          onClick={onToggleKind}
-          disabled={!onToggleKind || channel.kind === "alt"}
-          title={onToggleKind ? "Toggle creator/brand" : undefined}
-        >
-          {channel.kind}
-        </button>
+        <span className={`chip kind-chip kind-${channel.kind}`}>{channel.kind}</span>
         <span className="chip">{channel.discovered_via}</span>
-        {showStatus && <span className="chip status-chip">{channel.status}</span>}
+        {statusVisible && <span className="chip status-chip">{channel.status}</span>}
+        {provenance && <span className="chip provenance-chip">{provenance}</span>}
         {channel.median_recent_views !== null && channel.median_recent_views !== undefined && (
           <span className="chip views-chip" title="median views across recent uploads">
             ~{compact(channel.median_recent_views)} / VIDEO <em>REACH {effectiveReach(channel).toFixed(2)}</em>
@@ -1595,36 +1614,127 @@ function ChannelCard({
       <GrowthChips row={channel} />
       <Sparkline points={channel.snapshots ?? []} />
       <div className="meta-line">
-        {channel.source_seed_title && <span>seed: {channel.source_seed_title}</span>}
         {channel.search_query && <span>query: {channel.search_query}</span>}
-        {channel.mention_count > 0 && <span>mentions: {channel.mention_count}</span>}
         {channel.kind_reason && channel.status === "rejected" && <span>{channel.kind_reason}</span>}
         {channel.last_upload_at && <span>last upload {daysAgo(channel.last_upload_at)}d ago</span>}
         {channel.next_followup_at && <span>follow up {shortDate(channel.next_followup_at)}</span>}
       </div>
       <IconLinks links={channel.contact_links} />
       {open && <ScoreTable breakdown={channel.score_breakdown} />}
-      {(onShortlist || onReject || onToggleSeed || onWatchlist || onBackToPool || onRestoreToPool || onEnrich || onLogOutreach) && (
+      {actions.length > 0 && (
         <div className="card-actions">
-          {onShortlist && <button onClick={onShortlist}>Shortlist</button>}
-          {onLogOutreach && <button onClick={onLogOutreach}>Log outreach</button>}
-          {onWatchlist && <button onClick={onWatchlist}>Eyes Peeled</button>}
-          {onReject && <button onClick={onReject}>Reject</button>}
-          {onToggleSeed && (
-            <button
-              className={channel.is_seed ? "active-action" : ""}
-              onClick={onToggleSeed}
-            >
-              {channel.is_seed ? "Seeded" : "+ Seed"}
+          {primaryAction && (
+            <button className={`primary-action ${primaryAction.className ?? ""}`} onClick={primaryAction.onClick}>
+              {primaryAction.label}
             </button>
           )}
-          {onBackToPool && <button onClick={onBackToPool}>Back to Pool</button>}
-          {onRestoreToPool && <button onClick={onRestoreToPool}>Restore to Pool</button>}
-          {onEnrich && <button onClick={onEnrich} title="Enrich activity">Enrich</button>}
+          {overflowActions.length > 0 && (
+            <details className="action-overflow">
+              <summary aria-label="More actions" title="More actions">...</summary>
+              <div className="overflow-list">
+                {overflowActions.map((action) => (
+                  <button key={action.key} className={action.className} onClick={action.onClick} title={action.title}>
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       )}
     </article>
   );
+}
+
+type CardAction = {
+  key: string;
+  label: string;
+  onClick: () => void;
+  primary?: boolean;
+  className?: string;
+  title?: string;
+};
+
+function cardActions({
+  channel,
+  tab,
+  onShortlist,
+  onReject,
+  onToggleSeed,
+  onWatchlist,
+  onBackToPool,
+  onRestoreToPool,
+  onToggleKind,
+  onEnrich,
+  onLogOutreach,
+}: {
+  channel: ChannelCardRow;
+  tab?: Tab;
+  onShortlist?: () => void;
+  onReject?: () => void;
+  onToggleSeed?: () => void;
+  onWatchlist?: () => void;
+  onBackToPool?: () => void;
+  onRestoreToPool?: () => void;
+  onToggleKind?: () => void;
+  onEnrich?: () => void;
+  onLogOutreach?: () => void;
+}): CardAction[] {
+  const actions: CardAction[] = [];
+  if (onShortlist) {
+    actions.push({
+      key: "shortlist",
+      label: "Shortlist",
+      onClick: onShortlist,
+      primary: tab === "pool",
+    });
+  }
+  if (onLogOutreach) {
+    actions.push({
+      key: "outreach",
+      label: "Log outreach",
+      onClick: onLogOutreach,
+      primary: tab === "shortlist" || tab === "outreach",
+    });
+  }
+  if (onWatchlist) actions.push({ key: "watchlist", label: "Eyes Peeled", onClick: onWatchlist });
+  if (onReject) actions.push({ key: "reject", label: "Reject", onClick: onReject });
+  if (onToggleSeed) {
+    actions.push({
+      key: "seed",
+      label: channel.is_seed ? "Seeded" : "+ Seed",
+      onClick: onToggleSeed,
+      className: channel.is_seed ? "active-action" : undefined,
+    });
+  }
+  if (onBackToPool) actions.push({ key: "back-pool", label: "Back to Pool", onClick: onBackToPool });
+  if (onRestoreToPool) actions.push({ key: "restore-pool", label: "Restore to Pool", onClick: onRestoreToPool });
+  if (onToggleKind && channel.kind !== "alt") {
+    actions.push({
+      key: "kind",
+      label: channel.kind === "brand" ? "Mark creator" : "Mark brand",
+      onClick: onToggleKind,
+    });
+  }
+  if (onEnrich) actions.push({ key: "enrich", label: "Enrich", onClick: onEnrich, title: "Enrich activity" });
+
+  return actions;
+}
+
+function statusRedundantForTab(tab: Tab | undefined, status: ChannelStatus): boolean {
+  return (
+    (tab === "pool" && status === "candidate") ||
+    (tab === "shortlist" && status === "shortlisted") ||
+    (tab === "watchlist" && status === "watchlist") ||
+    (tab === "rejected" && status === "rejected")
+  );
+}
+
+function provenanceText(channel: ChannelCardRow): string | null {
+  const parts: string[] = [];
+  if (channel.source_seed_title) parts.push(`seed: ${channel.source_seed_title}`);
+  if (channel.mention_count > 0) parts.push(`${channel.mention_count} mention${channel.mention_count === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" / ") : null;
 }
 
 function OutreachDialog({
@@ -1641,7 +1751,7 @@ function OutreachDialog({
   );
   const [note, setNote] = useState("");
   const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : "");
-  const closed = outreachStatus === "signed" || outreachStatus === "passed";
+  const closed = outreachStatus === "signed" || outreachStatus === "passed" || outreachStatus === "ghosted";
 
   useEffect(() => {
     if (closed) setNextFollowup("");
@@ -2310,7 +2420,7 @@ function label(tab: Tab): string {
 function tabCount(tab: Tab, status: StatusPayload | null): number | null {
   if (!status) return null;
   if (tab === "pool") return status.channel_counts.pool ?? 0;
-  if (tab === "shortlist") return status.channel_counts.by_status.shortlisted ?? 0;
+  if (tab === "shortlist") return status.channel_counts.shortlist ?? 0;
   if (tab === "outreach") return status.channel_counts.outreach_active ?? 0;
   if (tab === "watchlist") return status.channel_counts.by_status.watchlist ?? 0;
   if (tab === "seeds") return status.channel_counts.seeds ?? 0;

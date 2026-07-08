@@ -167,6 +167,7 @@ export interface StatusPayload {
     by_status: Record<string, number>;
     by_kind: Record<string, number>;
     pool: number;
+    shortlist: number;
     seeds: number;
     outreach_active: number;
     outreach_closed: number;

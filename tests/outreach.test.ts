@@ -20,19 +20,36 @@ test("worker exposes outreach list and log endpoints", () => {
   assert.match(source, /\/api\\\/channels\\\/\(\[\^\/\]\+\)\\\/outreach/);
   assert.match(source, /function logOutreach/);
   assert.match(source, /INSERT INTO outreach_log/);
-  assert.match(source, /outreach_status NOT IN \('none', 'signed', 'passed'\)/);
-  assert.match(source, /outreach_status IN \('signed', 'passed'\)/);
+  assert.match(source, /parseOutreachStatusFilter/);
+  assert.match(source, /c\.outreach_status = \?/);
+  assert.match(source, /outreach_status IN \('sent', 'replied', 'in_talks'\)/);
+  assert.match(source, /outreach_status IN \('signed', 'passed', 'ghosted'\)/);
+  assert.match(source, /status = 'shortlisted' AND outreach_status = 'none'/);
   assert.match(source, /c\.last_touch_at ASC/);
 });
 
-test("ui includes outreach tab, optional follow-up, stale flag, and signed seed prompt", () => {
+test("ui includes outreach tab, shortlist funnel filter, optional follow-up, stale flag, and signed seed prompt", () => {
   const source = readFileSync("ui/src/App.tsx", "utf8");
 
   assert.match(source, /"outreach"/);
+  assert.match(source, /outreach_status: stage === "shortlist" \? "none" : null/);
   assert.match(source, /Log outreach/);
   assert.match(source, /Promote to seed/);
   assert.match(source, /STALE/);
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
   assert.doesNotMatch(source, /daysFromNowInput/);
   assert.match(source, /Closed \(\{closed\.length\}\)/);
+});
+
+test("ui card actions use one primary action and overflow for secondary actions", () => {
+  const source = readFileSync("ui/src/App.tsx", "utf8");
+  const styles = readFileSync("ui/src/styles.css", "utf8");
+
+  assert.match(source, /primary: tab === "pool"/);
+  assert.match(source, /primary: tab === "shortlist" \|\| tab === "outreach"/);
+  assert.match(source, /className="action-overflow"/);
+  assert.match(source, /statusRedundantForTab/);
+  assert.match(source, /provenanceText/);
+  assert.match(styles, /\.action-overflow/);
+  assert.match(styles, /\.discovery-console \.toggle-label input:checked::after/);
 });

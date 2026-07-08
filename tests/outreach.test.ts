@@ -47,6 +47,8 @@ test("ui card actions use one primary action and overflow for secondary actions"
 
   assert.match(source, /primary: tab === "pool"/);
   assert.match(source, /primary: tab === "shortlist" \|\| tab === "outreach"/);
+  assert.match(source, /visibleSecondary: tab === "pool" \|\| tab === "shortlist"/);
+  assert.match(source, /secondary-action/);
   assert.match(source, /className="action-overflow"/);
   assert.match(source, /statusRedundantForTab/);
   assert.match(source, /provenanceText/);

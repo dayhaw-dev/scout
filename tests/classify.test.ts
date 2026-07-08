@@ -51,6 +51,32 @@ test("classifies a corporate sponsor channel as brand", () => {
   assert.equal(result.kind, "brand");
 });
 
+test("classifies storefront and product brand channel names as brand", () => {
+  const recteq = classifyChannel(
+    {
+      channel_id: "recteq",
+      title: "recteq",
+      handle: "recteq",
+      description: "Wood pellet grills, smokers, recipes, and product demos.",
+      raw_json: JSON.stringify({ links: ["https://www.recteq.com"] }),
+    },
+    seeds,
+  );
+  const ace = classifyChannel(
+    {
+      channel_id: "ace-hardware",
+      title: "Ace Hardware",
+      handle: "acehardware",
+      description: "Helpful hardware store tips, tools, products, and outdoor living ideas.",
+      raw_json: JSON.stringify({ links: ["https://www.acehardware.com"] }),
+    },
+    seeds,
+  );
+
+  assert.equal(recteq.kind, "brand");
+  assert.equal(ace.kind, "brand");
+});
+
 test("classifies a seed alternate channel as alt", () => {
   const result = classifyChannel(
     {

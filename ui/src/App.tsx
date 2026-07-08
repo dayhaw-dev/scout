@@ -644,7 +644,10 @@ function StageView({
     const query = searchQuery.trim();
     if (!query || bulk.active) return;
     const before = new Set(channels.map((channel) => channel.channel_id));
-    const baseQueries = deepSearch ? [query, ...deepVariants].filter(Boolean) : [query];
+    const sanitizedVariants = deepSearch
+      ? sanitizeDeepSearchVariants(query, deepVariants)
+      : { variants: [], dropped: [] };
+    const baseQueries = deepSearch ? [query, ...sanitizedVariants.variants].filter(Boolean) : [query];
     const plan = searchPlanForCap(baseQueries, searchMaxResolves, autoEnrich, deepSearch ? 40 : Number.POSITIVE_INFINITY);
     const controller = bulk.start();
     try {
@@ -710,7 +713,7 @@ function StageView({
       await load();
       onChanged();
       onToast({
-        message: searchRunToast(result, variantSummaries, enrichedTitles),
+        message: searchRunToast(result, variantSummaries, enrichedTitles, sanitizedVariants.dropped),
       });
     } catch (error) {
       onError(error);
@@ -736,8 +739,11 @@ function StageView({
     }
   }
 
+  const currentSanitizedVariants = deepSearch
+    ? sanitizeDeepSearchVariants(searchQuery, deepVariants)
+    : { variants: [], dropped: [] };
   const currentSearchPlan = searchPlanForCap(
-    deepSearch ? [searchQuery.trim(), ...deepVariants].filter(Boolean) : [searchQuery.trim()].filter(Boolean),
+    deepSearch ? [searchQuery.trim(), ...currentSanitizedVariants.variants].filter(Boolean) : [searchQuery.trim()].filter(Boolean),
     searchMaxResolves,
     autoEnrich,
     deepSearch ? 40 : Number.POSITIVE_INFINITY,
@@ -1567,7 +1573,8 @@ function ChannelCard({
     onLogOutreach,
   });
   const primaryAction = actions.find((action) => action.primary);
-  const overflowActions = actions.filter((action) => !action.primary);
+  const secondaryActions = actions.filter((action) => action.visibleSecondary);
+  const overflowActions = actions.filter((action) => !action.primary && !action.visibleSecondary);
   const provenance = provenanceText(channel);
   const statusVisible = showStatus && !statusRedundantForTab(tab, channel.status);
 
@@ -1628,6 +1635,11 @@ function ChannelCard({
               {primaryAction.label}
             </button>
           )}
+          {secondaryActions.map((action) => (
+            <button key={action.key} className={`secondary-action ${action.className ?? ""}`} onClick={action.onClick} title={action.title}>
+              {action.label}
+            </button>
+          ))}
           {overflowActions.length > 0 && (
             <details className="action-overflow">
               <summary aria-label="More actions" title="More actions">...</summary>
@@ -1651,6 +1663,7 @@ type CardAction = {
   label: string;
   onClick: () => void;
   primary?: boolean;
+  visibleSecondary?: boolean;
   className?: string;
   title?: string;
 };
@@ -1698,7 +1711,14 @@ function cardActions({
     });
   }
   if (onWatchlist) actions.push({ key: "watchlist", label: "Eyes Peeled", onClick: onWatchlist });
-  if (onReject) actions.push({ key: "reject", label: "Reject", onClick: onReject });
+  if (onReject) {
+    actions.push({
+      key: "reject",
+      label: "Reject",
+      onClick: onReject,
+      visibleSecondary: tab === "pool" || tab === "shortlist",
+    });
+  }
   if (onToggleSeed) {
     actions.push({
       key: "seed",
@@ -2596,6 +2616,61 @@ function generateDeepVariants(query: string, contentSuggestions: SearchSuggestio
   return uniqueTerms([...related, ...templated]).slice(0, 4);
 }
 
+type DroppedVariant = {
+  term: string;
+  reason: string;
+};
+
+function sanitizeDeepSearchVariants(baseQuery: string, variants: string[]): { variants: string[]; dropped: DroppedVariant[] } {
+  const base = normalizeQuery(baseQuery);
+  const baseTokens = new Set(queryTokens(base));
+  const accepted: string[] = [];
+  const dropped: DroppedVariant[] = [];
+  const seen = new Set<string>();
+
+  for (const variant of variants) {
+    const term = normalizeQuery(variant);
+    if (!term) continue;
+    if (seen.has(term)) {
+      dropped.push({ term, reason: "duplicate" });
+      continue;
+    }
+    seen.add(term);
+
+    if (hasRepeatedTokenSequence(term)) {
+      dropped.push({ term, reason: "repeated phrase" });
+      continue;
+    }
+
+    const terms = queryTokens(term);
+    if (!terms.some((token) => !baseTokens.has(token))) {
+      dropped.push({ term, reason: "no new terms" });
+      continue;
+    }
+
+    accepted.push(term);
+  }
+
+  return { variants: accepted, dropped };
+}
+
+function queryTokens(value: string): string[] {
+  return normalizeQuery(value).split(/\s+/).filter(Boolean);
+}
+
+function hasRepeatedTokenSequence(value: string): boolean {
+  const tokens = queryTokens(value);
+  for (let size = 2; size <= Math.min(3, Math.floor(tokens.length / 2)); size += 1) {
+    const seen = new Set<string>();
+    for (let index = 0; index <= tokens.length - size; index += 1) {
+      const sequence = tokens.slice(index, index + size).join(" ");
+      if (seen.has(sequence)) return true;
+      seen.add(sequence);
+    }
+  }
+  return false;
+}
+
 function searchPlanForCap(
   queries: string[],
   requestedResolves: number,
@@ -2621,6 +2696,7 @@ function searchRunToast(
   result: { done: number; total: number; creditsSpent: number; failures: Array<{ label: string; error: string }>; cancelled: boolean },
   summaries: SearchSummary[],
   enrichedTitles: string[],
+  droppedVariants: DroppedVariant[] = [],
 ): string {
   const perVariant = summaries
     .map((summary) => `${summary.query}: ${summary.channels_resolved}`)
@@ -2629,8 +2705,11 @@ function searchRunToast(
     ? ` Failures: ${result.failures.map((failure) => `${failure.label}: ${failure.error}`).join(" | ")}.`
     : "";
   const enriched = enrichedTitles.length ? ` Auto-enriched ${enrichedTitles.length}.` : "";
+  const dropped = droppedVariants.length
+    ? ` Dropped variants: ${droppedVariants.map((variant) => `${variant.term} (${variant.reason})`).join(" | ")}.`
+    : "";
   const prefix = result.cancelled ? "Cancelled: " : "";
-  return `${prefix}Search ran ${result.done}/${result.total}, spent ${result.creditsSpent} credit(s). ${perVariant}${enriched}${failures}`;
+  return `${prefix}Search ran ${result.done}/${result.total}, spent ${result.creditsSpent} credit(s). ${perVariant}${enriched}${dropped}${failures}`;
 }
 
 function normalizeQuery(value: string): string {

@@ -33,6 +33,10 @@ export const BRAND_TOKENS = [
   "films",
   "media",
   "cookware",
+  "hardware",
+  "grills",
+  "smokers",
+  "pellet",
   "supplements",
   "superfoods",
   "foods",
@@ -48,6 +52,7 @@ export const BRAND_TOKENS = [
   "corp",
   "amazon",
   "sony",
+  "recteq",
 ];
 
 const PRODUCT_FIRST_PATTERNS = [

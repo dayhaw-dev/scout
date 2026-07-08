@@ -46,6 +46,9 @@ test("phase 11 pool search supports deep variants and auto-enrich accounting", (
   assert.match(app, /AUTO-ENRICH/);
   assert.match(app, /DEEP/);
   assert.match(app, /generateDeepVariants/);
+  assert.match(app, /sanitizeDeepSearchVariants/);
+  assert.match(app, /hasRepeatedTokenSequence/);
+  assert.match(app, /Dropped variants/);
   assert.match(app, /searchPlanForCap/);
   assert.match(app, /api\.enrich\(\{ scope: "channel", channel_id: arrival\.channel_id, limit: 1 \}\)/);
   assert.match(app, /max \{currentSearchMaxCost\} credits/);

@@ -581,6 +581,12 @@ a:hover {
   border-color: #22d3ee;
 }
 
+.secondary-action {
+  border-color: rgba(248, 113, 113, 0.42);
+  color: #fecaca;
+  background: rgba(35, 18, 26, 0.58);
+}
+
 .action-overflow {
   position: relative;
 }

@@ -612,13 +612,9 @@ async function outreachRows(
     : "c.outreach_status NOT IN ('none', 'signed', 'passed')";
   const order = closed
     ? "c.last_touch_at DESC, c.updated_at DESC"
-    : `CASE
-        WHEN c.next_followup_at IS NOT NULL AND date(c.next_followup_at) < date('now') THEN 0
-        WHEN c.next_followup_at IS NOT NULL THEN 1
-        ELSE 2
-      END,
-      c.next_followup_at ASC,
-      c.last_touch_at ASC`;
+    : `CASE WHEN c.last_touch_at IS NULL THEN 1 ELSE 0 END,
+      c.last_touch_at ASC,
+      c.updated_at ASC`;
   const { results } = await env.SCOUT_DB.prepare(
     `SELECT c.*, s.title AS source_seed_title
     FROM channels c

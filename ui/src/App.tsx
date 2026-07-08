@@ -993,7 +993,7 @@ function OutreachView({
               key={channel.channel_id}
               channel={channel}
               showStatus
-              overdue={isOverdue(channel.next_followup_at)}
+              stale={isStaleOutreach(channel)}
               onLogOutreach={() => setOutreachChannel(channel)}
               onShortlist={channel.status !== "shortlisted" ? () => void patchStatus(channel, "shortlisted", `${channel.title ?? "Channel"} shortlisted.`) : undefined}
               onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
@@ -1529,7 +1529,7 @@ function ChannelCard({
   onEnrich,
   onLogOutreach,
   highlighted = false,
-  overdue = false,
+  stale = false,
 }: {
   channel: ChannelCardRow;
   showStatus?: boolean;
@@ -1543,11 +1543,11 @@ function ChannelCard({
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   highlighted?: boolean;
-  overdue?: boolean;
+  stale?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${overdue ? "overdue-card" : ""}`}>
+    <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
       <div className="card-head">
         <ChannelImage
           src={channel.thumbnail_url}
@@ -1587,7 +1587,7 @@ function ChannelCard({
         )}
         {hotChannel(channel) && <span className="chip hot-chip">HOT</span>}
         {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
-        {overdue && <span className="chip overdue-chip">OVERDUE</span>}
+        {stale && <span className="chip stale-chip">STALE</span>}
         {channel.outreach_status && channel.outreach_status !== "none" && (
           <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
         )}
@@ -1640,7 +1640,7 @@ function OutreachDialog({
     channel.outreach_status && channel.outreach_status !== "none" ? channel.outreach_status : "sent",
   );
   const [note, setNote] = useState("");
-  const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : daysFromNowInput(7));
+  const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : "");
   const closed = outreachStatus === "signed" || outreachStatus === "passed";
 
   useEffect(() => {
@@ -1675,7 +1675,7 @@ function OutreachDialog({
           <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="sent intro, replied with rates, follow-up context..." required />
         </label>
         <label>
-          Next follow-up
+          Next follow-up <span className="optional">optional</span>
           <input type="date" value={nextFollowup} onChange={(event) => setNextFollowup(event.target.value)} disabled={closed} />
         </label>
         {outreachStatus === "signed" && !channel.is_seed && (
@@ -2410,12 +2410,6 @@ function dateInputValue(value: string): string {
   return parsed.toISOString().slice(0, 10);
 }
 
-function daysFromNowInput(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
 function shortDateTime(value: string): string {
   return new Date(value).toLocaleString(undefined, {
     month: "short",
@@ -2551,14 +2545,9 @@ function daysAgo(value: string): number {
   return Math.max(0, Math.round((Date.now() - date.getTime()) / (24 * 60 * 60 * 1000)));
 }
 
-function isOverdue(value: string | null | undefined): boolean {
-  if (!value) return false;
-  const due = new Date(value);
-  if (Number.isNaN(due.getTime())) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  due.setHours(0, 0, 0, 0);
-  return due.getTime() < today.getTime();
+function isStaleOutreach(channel: ChannelCardRow): boolean {
+  if (channel.outreach_status !== "sent" && channel.outreach_status !== "ghosted") return false;
+  return daysAgo(channel.last_touch_at ?? "") > 14;
 }
 
 function outreachLabel(value: OutreachStatus): string {

@@ -22,14 +22,17 @@ test("worker exposes outreach list and log endpoints", () => {
   assert.match(source, /INSERT INTO outreach_log/);
   assert.match(source, /outreach_status NOT IN \('none', 'signed', 'passed'\)/);
   assert.match(source, /outreach_status IN \('signed', 'passed'\)/);
+  assert.match(source, /c\.last_touch_at ASC/);
 });
 
-test("ui includes outreach tab, logger, overdue flag, and signed seed prompt", () => {
+test("ui includes outreach tab, optional follow-up, stale flag, and signed seed prompt", () => {
   const source = readFileSync("ui/src/App.tsx", "utf8");
 
   assert.match(source, /"outreach"/);
   assert.match(source, /Log outreach/);
   assert.match(source, /Promote to seed/);
-  assert.match(source, /OVERDUE/);
+  assert.match(source, /STALE/);
+  assert.match(source, /next_followup_at: nextFollowup \|\| null/);
+  assert.doesNotMatch(source, /daysFromNowInput/);
   assert.match(source, /Closed \(\{closed\.length\}\)/);
 });

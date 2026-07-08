@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.tmp-test/
+.dev.vars
+.env
+.env.*
+*.env
+dist/
+*.log
+/*.sql
+AGENTS.md

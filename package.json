@@ -1,0 +1,31 @@
+{
+  "name": "scout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --persist-to ./.wrangler/state",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply scout --local",
+    "db:migrate:remote": "wrangler d1 migrations apply scout --remote",
+    "db:spend:local": "wrangler d1 execute scout --local --command \"SELECT date(created_at) AS day, COUNT(*) AS requests, SUM(credits_estimated) AS credits FROM api_log GROUP BY day ORDER BY day DESC;\"",
+    "test": "tsc -p tsconfig.test.json && node --test .tmp-test/tests/*.test.js",
+    "typecheck": "tsc --noEmit && tsc -p ui/tsconfig.json --noEmit",
+    "ui:dev": "vite --config ui/vite.config.ts",
+    "ui:build": "vite build --config ui/vite.config.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "wrangler": "latest"
+  },
+  "dependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.1.3"
+  }
+}

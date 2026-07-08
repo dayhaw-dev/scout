@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+test("phase 11 defaults min score to zero", () => {
+  const source = readFileSync("src/index.ts", "utf8");
+  const app = readFileSync("ui/src/App.tsx", "utf8");
+  const migration = readFileSync("migrations/0013_phase11_seed_yield_repair.sql", "utf8");
+  assert.match(source, /parseNumberParam\(url\.searchParams\.get\("min_score"\), 0, 0, 100\)/);
+  assert.match(app, /minScore: Number\(params\.get\("min_score"\) \?\? 0\)/);
+  assert.match(source, /source_channel_id = COALESCE\(excluded\.source_channel_id, channels\.source_channel_id\)/);
+  assert.match(migration, /public template/);
+  assert.doesNotMatch(migration, /WHERE is_seed = 1 AND title =/);
+});
+
+test("phase 11 exposes title-mined content suggestions and seed query chips", () => {
+  const source = readFileSync("src/index.ts", "utf8");
+  const app = readFileSync("ui/src/App.tsx", "utf8");
+  const api = readFileSync("ui/src/api.ts", "utf8");
+  const migration = readFileSync("migrations/0014_seed_queries.sql", "utf8");
+  const topicMigration = readFileSync("migrations/0015_seed_topics.sql", "utf8");
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS seed_queries/);
+  assert.match(topicMigration, /CREATE TABLE IF NOT EXISTS seed_topics/);
+  assert.match(source, /storedContentSuggestions/);
+  assert.match(source, /storedSeedQueryPhraseMap/);
+  assert.match(source, /storedTopicSuggestions/);
+  assert.doesNotMatch(source, /suggestions: aggregateSeedSuggestions/);
+  assert.match(source, /\/api\/admin\/mine-queries/);
+  assert.match(source, /\/api\/admin\/repair-yields/);
+  assert.match(source, /content_suggestions/);
+  assert.match(source, /query_phrases/);
+  assert.doesNotMatch(source, /content_suggestions: aggregateTitleQuerySuggestions/);
+  assert.match(app, /<SuggestionRows/);
+  assert.match(app, /setContentSuggestions\(\[\]\)/);
+  assert.match(app, /Queries \{queriesOpen \? "hide" : "show"\}/);
+  assert.match(api, /content_suggestions: SearchSuggestion\[\]/);
+  assert.match(api, /query_phrases\?: string\[\]/);
+  assert.match(api, /mineQueries/);
+  assert.match(api, /topics_written/);
+  assert.match(api, /repairYields/);
+  assert.doesNotMatch(app, /phrases\.slice\(0, 5\)\.map/);
+});
+
+test("phase 11 pool search supports deep variants and auto-enrich accounting", () => {
+  const app = readFileSync("ui/src/App.tsx", "utf8");
+  assert.match(app, /AUTO-ENRICH/);
+  assert.match(app, /DEEP/);
+  assert.match(app, /generateDeepVariants/);
+  assert.match(app, /searchPlanForCap/);
+  assert.match(app, /api\.enrich\(\{ scope: "channel", channel_id: arrival\.channel_id, limit: 1 \}\)/);
+  assert.match(app, /max \{currentSearchMaxCost\} credits/);
+});

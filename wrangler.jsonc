@@ -1,0 +1,31 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "scout",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-07",
+	"observability": {
+		"enabled": true
+	},
+	"triggers": {
+		"crons": [
+			"0 9 * * 1,4"
+		]
+	},
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	},
+	"d1_databases": [
+		{
+			"binding": "SCOUT_DB",
+			"database_name": "scout",
+			// REPLACE with output of wrangler d1 create scout
+			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"migrations_dir": "migrations"
+		}
+	]
+}
+
+

@@ -31,6 +31,10 @@ test("phase 11 exposes title-mined content suggestions and seed query chips", ()
   assert.match(source, /query_phrases/);
   assert.doesNotMatch(source, /content_suggestions: aggregateTitleQuerySuggestions/);
   assert.match(app, /<SuggestionRows/);
+  assert.match(app, /searchedSuggestions\.length/);
+  assert.match(app, /\{searchedSuggestions\.length\} searched/);
+  assert.match(app, /Query pool low\. Regen from seeds/);
+  assert.match(app, /onOpenSeeds/);
   assert.match(app, /setContentSuggestions\(\[\]\)/);
   assert.match(app, /Queries \{queriesOpen \? "hide" : "show"\}/);
   assert.match(api, /content_suggestions: SearchSuggestion\[\]/);
@@ -43,13 +47,25 @@ test("phase 11 exposes title-mined content suggestions and seed query chips", ()
 
 test("phase 11 pool search supports deep variants and auto-enrich accounting", () => {
   const app = readFileSync("ui/src/App.tsx", "utf8");
+  const api = readFileSync("ui/src/api.ts", "utf8");
+  const source = readFileSync("src/index.ts", "utf8");
   assert.match(app, /AUTO-ENRICH/);
   assert.match(app, /DEEP/);
-  assert.match(app, /generateDeepVariants/);
+  assert.doesNotMatch(app, /function generateDeepVariants/);
   assert.match(app, /sanitizeDeepSearchVariants/);
   assert.match(app, /hasRepeatedTokenSequence/);
   assert.match(app, /Dropped variants/);
   assert.match(app, /searchPlanForCap/);
   assert.match(app, /api\.enrich\(\{ scope: "channel", channel_id: arrival\.channel_id, limit: 1 \}\)/);
-  assert.match(app, /max \{currentSearchMaxCost\} credits/);
+  assert.match(app, /searchCreditCapLabel/);
+  assert.match(app, /NO CAP/);
+  assert.match(app, /estimated max \$\{currentSearchMaxCost\} credits/);
+  assert.match(app, /api\.deepVariants\(query\)/);
+  assert.match(app, /currentSanitizedVariants\.variants\.map/);
+  assert.match(app, /newArrivalIds/);
+  assert.match(app, /NEW/);
+  assert.match(api, /deepVariants\(queryText: string\)/);
+  assert.match(source, /\/api\/search\/deep-variants/);
+  assert.match(source, /generateDeepVariants\(\{ baseQuery: query \}\)/);
+  assert.match(source, /fallbackDeepVariants/);
 });

@@ -34,6 +34,8 @@ test("ui includes outreach tab, shortlist funnel filter, optional follow-up, sta
   assert.match(source, /"outreach"/);
   assert.match(source, /outreach_status: stage === "shortlist" \? "none" : null/);
   assert.match(source, /Log outreach/);
+  assert.match(source, /Update status/);
+  assert.match(source, /latest_outreach_note/);
   assert.match(source, /Promote to seed/);
   assert.match(source, /STALE/);
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
@@ -47,11 +49,24 @@ test("ui card actions use one primary action and overflow for secondary actions"
 
   assert.match(source, /primary: tab === "pool"/);
   assert.match(source, /primary: tab === "shortlist" \|\| tab === "outreach"/);
+  assert.match(source, /updateOutreach/);
   assert.match(source, /visibleSecondary: tab === "pool" \|\| tab === "shortlist"/);
   assert.match(source, /secondary-action/);
+  assert.match(source, /onEnrich=\{stage !== "rejected" \? \(\) => void enrichCard\(channel\) : undefined\}/);
+  assert.match(source, /onEnrich=\{\(\) => void enrichCard\(channel\)\}/);
+  assert.match(source, /enrichFreshDays: enrichmentFreshDays\(channel\)/);
+  assert.match(source, /title: disabled \? `enriched \$\{enrichFreshDays\}d ago` : "Enrich activity"/);
   assert.match(source, /className="action-overflow"/);
+  assert.match(source, /createPortal/);
+  assert.match(source, /closeOnOutside/);
+  assert.match(source, /closeOnEscape/);
+  assert.match(source, /overflow-trigger/);
+  assert.match(source, /overflow-portal/);
   assert.match(source, /statusRedundantForTab/);
   assert.match(source, /provenanceText/);
   assert.match(styles, /\.action-overflow/);
-  assert.match(styles, /\.discovery-console \.toggle-label input:checked::after/);
+  assert.match(styles, /\.overflow-portal/);
+  assert.match(styles, /\.toggle-chip\.active/);
+  assert.match(styles, /\.outreach-field/);
+  assert.match(styles, /\.outreach-control/);
 });

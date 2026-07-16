@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ApiError,
   BrandRow,
@@ -14,6 +15,7 @@ import {
   SearchRecord,
   SearchSuggestion,
   SearchSummary,
+  SponsorScanSummary,
   StatusPayload,
 } from "./api";
 import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
@@ -35,6 +37,11 @@ type BulkUi = {
   update: (progress: BulkProgress) => void;
   cancel: () => void;
   finish: () => void;
+};
+type SponsorScanState = Record<string, SponsorScanSummary>;
+type SponsorScanTarget = {
+  channel: ChannelCardRow;
+  summary: SponsorScanSummary;
 };
 
 const SESSION_KEY = "scout_admin_key";
@@ -179,6 +186,7 @@ export function App() {
             onToast={setToast}
             onChanged={refreshStatus}
             bulk={bulkUi}
+            onOpenSeeds={() => setTab("seeds")}
           />
         )}
         {adminKey && tab === "seeds" && (
@@ -345,6 +353,7 @@ function StageView({
   onToast,
   onChanged,
   bulk,
+  onOpenSeeds,
 }: {
   stage: StageTab;
   api: ScoutApi;
@@ -353,6 +362,7 @@ function StageView({
   onToast: (toast: ToastState) => void;
   onChanged: () => void;
   bulk: BulkUi;
+  onOpenSeeds: () => void;
 }) {
   const initialFilters = useMemo(() => initialShortlistFilters(), []);
   const [channels, setChannels] = useState<ChannelCardRow[]>([]);
@@ -376,10 +386,17 @@ function StageView({
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
   const [deepSearch, setDeepSearch] = useState(false);
   const [autoEnrich, setAutoEnrich] = useState(true);
+  const [autoScan, setAutoScan] = useState(true);
   const [deepVariants, setDeepVariants] = useState<string[]>([]);
+  const [deepVariantsLoading, setDeepVariantsLoading] = useState(false);
+  const [deepVariantSource, setDeepVariantSource] = useState<"llm" | "mixed" | "fallback" | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
   const [highlightIds, setHighlightIds] = useState<Set<string>>(() => new Set());
+  const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(() => new Set());
   const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
+  const [sponsorScans, setSponsorScans] = useState<SponsorScanState>({});
+  const [sponsorScanTarget, setSponsorScanTarget] = useState<SponsorScanTarget | null>(null);
+  const [scanningSponsorId, setScanningSponsorId] = useState<string | null>(null);
   const showPoolFilters = stage === "pool";
 
   useEffect(() => {
@@ -458,18 +475,58 @@ function StageView({
   }, [api, loadSearches, showPoolFilters]);
 
   useEffect(() => {
-    if (!deepSearch) return;
-    setDeepVariants(generateDeepVariants(searchQuery, contentSuggestions));
-  }, [contentSuggestions, deepSearch, searchQuery]);
+    const query = searchQuery.trim();
+    if (!deepSearch || !query) {
+      setDeepVariants([]);
+      setDeepVariantsLoading(false);
+      setDeepVariantSource(null);
+      return;
+    }
 
-  const visible = useMemo(() => sortChannels(
-    showPoolFilters
-      ? channels.filter((channel) =>
-          (channel.title ?? "").toLowerCase().includes(titleFilter.toLowerCase()),
-        )
-      : channels,
-    stage === "watchlist" ? "growth" : showPoolFilters ? sort : "score",
-  ), [channels, showPoolFilters, sort, stage, titleFilter]);
+    let cancelled = false;
+    setDeepVariants([]);
+    setDeepVariantSource(null);
+    setDeepVariantsLoading(true);
+    const timeout = window.setTimeout(() => {
+      api.deepVariants(query)
+        .then((result) => {
+          if (cancelled) return;
+          const sanitized = sanitizeDeepSearchVariants(query, result.variants);
+          setDeepVariants(sanitized.variants);
+          setDeepVariantSource(result.source);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setDeepVariants([]);
+          setDeepVariantSource(null);
+          onError(error);
+        })
+        .finally(() => {
+          if (!cancelled) setDeepVariantsLoading(false);
+        });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [api, deepSearch, onError, searchQuery]);
+
+  const visible = useMemo(() => {
+    const sorted = sortChannels(
+      showPoolFilters
+        ? channels.filter((channel) =>
+            (channel.title ?? "").toLowerCase().includes(titleFilter.toLowerCase()),
+          )
+        : channels,
+      stage === "watchlist" ? "growth" : showPoolFilters ? sort : "score",
+    );
+
+    if (!showPoolFilters || newArrivalIds.size === 0) return sorted;
+    return [...sorted].sort((left, right) =>
+      Number(newArrivalIds.has(right.channel_id)) - Number(newArrivalIds.has(left.channel_id)),
+    );
+  }, [channels, newArrivalIds, showPoolFilters, sort, stage, titleFilter]);
 
   async function patchStatus(channel: ChannelCardRow, nextStatus: ChannelStatus, messageStatus = nextStatus) {
     const previousStatus = channel.status;
@@ -606,6 +663,51 @@ function StageView({
     }
   }
 
+  async function scanSponsors(channel: ChannelCardRow) {
+    setScanningSponsorId(channel.channel_id);
+    try {
+      const summary = await api.sponsorScan(channel.channel_id);
+      setSponsorScans((scans) => ({ ...scans, [channel.channel_id]: summary }));
+      setSponsorScanTarget({ channel, summary });
+      onToast({
+        message: `${channel.title ?? "Channel"} sponsor scan complete: ${summary.sponsoredCount} of ${summary.totalScanned}.`,
+      });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setScanningSponsorId(null);
+    }
+  }
+
+  async function scanSponsorsDeepHistory(channel: ChannelCardRow) {
+    setScanningSponsorId(channel.channel_id);
+    try {
+      const summary = await api.sponsorScanDeepHistory(channel.channel_id);
+      setSponsorScans((scans) => ({ ...scans, [channel.channel_id]: summary }));
+      setSponsorScanTarget({ channel, summary });
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"} deep sponsor scan complete: ${summary.sponsoredCount} of ${summary.totalScanned}.`,
+      });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setScanningSponsorId(null);
+    }
+  }
+
+  async function autoScanArrivals(arrivals: ChannelCardRow[]) {
+    for (const arrival of arrivals) {
+      if (sponsorScanFresh(arrival)) continue;
+      try {
+        const summary = await api.sponsorScan(arrival.channel_id);
+        setSponsorScans((scans) => ({ ...scans, [arrival.channel_id]: summary }));
+      } catch (error) {
+        onError(error);
+      }
+    }
+  }
+
   async function snapshotWatchlist() {
     const targets = channels;
     if (targets.length === 0 || bulk.active) return;
@@ -644,6 +746,7 @@ function StageView({
     const query = searchQuery.trim();
     if (!query || bulk.active) return;
     const before = new Set(channels.map((channel) => channel.channel_id));
+    setNewArrivalIds(new Set());
     const sanitizedVariants = deepSearch
       ? sanitizeDeepSearchVariants(query, deepVariants)
       : { variants: [], dropped: [] };
@@ -654,6 +757,7 @@ function StageView({
       const variantSummaries: SearchSummary[] = [];
       const enrichedTitles: string[] = [];
       const searchedNow: string[] = [];
+      const arrivalsThisRun = new Set<string>();
       let knownIds = before;
       const result = await runBulkOperation({
         action: deepSearch ? "Deep searching" : "Searching",
@@ -690,6 +794,7 @@ function StageView({
           }
 
           const arrivedIds = arrivals.map((arrival) => arrival.channel_id);
+          for (const id of arrivedIds) arrivalsThisRun.add(id);
           setHighlightIds(new Set(arrivedIds));
           window.setTimeout(() => setHighlightIds(new Set()), 1800);
 
@@ -710,7 +815,11 @@ function StageView({
       if (latest) setSearchSummary(latest);
       await loadSearches();
       setSearches((items) => mergeSearchTerms(items, searchedNow));
-      await load();
+      const latestChannels = await load();
+      if (autoScan && arrivalsThisRun.size > 0) {
+        await autoScanArrivals(latestChannels.filter((channel) => arrivalsThisRun.has(channel.channel_id)));
+      }
+      setNewArrivalIds(arrivalsThisRun);
       onChanged();
       onToast({
         message: searchRunToast(result, variantSummaries, enrichedTitles, sanitizedVariants.dropped),
@@ -749,40 +858,94 @@ function StageView({
     deepSearch ? 40 : Number.POSITIVE_INFINITY,
   );
   const currentSearchMaxCost = searchPlanMaxCost(currentSearchPlan.queries.length, currentSearchPlan.maxResolves, autoEnrich);
+  const searchCreditCap = deepSearch ? 40 : null;
+  const searchCreditCapLabel = searchCreditCap && searchCreditCap > 0 ? `${searchCreditCap} credits` : "NO CAP";
 
   return (
     <section className="view">
       {showPoolFilters ? (
         <>
           <form className="discovery-console clipped" onSubmit={(event) => void runPoolSearch(event)}>
-            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="keyword discovery" />
-            <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
-              <option value="">any upload date</option>
-              <option value="today">today</option>
-              <option value="this_week">this week</option>
-              <option value="this_month">this month</option>
-              <option value="this_year">this year</option>
-            </select>
-            <NumberStepper label="min subs" value={searchMinSubs} min={0} max={100000000} onChange={setSearchMinSubs} />
-            <NumberStepper label="resolves" value={searchMaxResolves} min={1} max={25} onChange={setSearchMaxResolves} />
-            <label className="toggle-label">
-              <input type="checkbox" checked={deepSearch} onChange={(event) => setDeepSearch(event.target.checked)} />
-              DEEP
-            </label>
-            <label className="toggle-label">
-              <input type="checkbox" checked={autoEnrich} onChange={(event) => setAutoEnrich(event.target.checked)} />
-              AUTO-ENRICH
-            </label>
-            <div className="cost">
-              max {currentSearchMaxCost} credits{deepSearch ? ` / cap 40 / ${currentSearchPlan.maxResolves} resolves each` : ""}
+            <div className="discovery-field keyword-field">
+              <span className="field-label">KEYWORD</span>
+              <div className="keyword-control">
+                <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="keyword discovery" />
+                <button className="primary" type="submit" disabled={bulk.active || !searchQuery.trim()}>
+                  {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
+                </button>
+              </div>
             </div>
-            <button className="primary" type="submit" disabled={bulk.active || !searchQuery.trim()}>
-              {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
-            </button>
-            {deepSearch && deepVariants.length > 0 && (
+            <label className="discovery-field">
+              <span className="field-label">UPLOADS</span>
+              <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
+                <option value="">any upload date</option>
+                <option value="today">today</option>
+                <option value="this_week">this week</option>
+                <option value="this_month">this month</option>
+                <option value="this_year">this year</option>
+              </select>
+            </label>
+            <label className="discovery-field">
+              <span className="field-label">MIN SUBS</span>
+              <input
+                type="number"
+                min={0}
+                max={100000000}
+                value={searchMinSubs}
+                onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
+              />
+            </label>
+            <label className="discovery-field">
+              <span className="field-label">RESOLVES</span>
+              <input
+                type="number"
+                min={1}
+                max={25}
+                value={searchMaxResolves}
+                onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
+              />
+            </label>
+            <div className="discovery-field toggle-field" title="expands search with 4 query variants">
+              <span className="field-label">DEEP</span>
+              <button
+                type="button"
+                className={`toggle-chip ${deepSearch ? "active" : ""}`}
+                aria-pressed={deepSearch}
+                onClick={() => setDeepSearch((value) => !value)}
+              >
+                DEEP
+              </button>
+            </div>
+            <div className="discovery-field toggle-field" title="enrich new arrivals on landing">
+              <span className="field-label">AUTO-ENRICH</span>
+              <button
+                type="button"
+                className={`toggle-chip ${autoEnrich ? "active" : ""}`}
+                aria-pressed={autoEnrich}
+                onClick={() => setAutoEnrich((value) => !value)}
+              >
+                AUTO-ENRICH
+              </button>
+            </div>
+            <div className="discovery-field toggle-field" title="scan new arrivals for SponsorBlock signals">
+              <span className="field-label">AUTO-SCAN</span>
+              <button
+                type="button"
+                className={`toggle-chip ${autoScan ? "active" : ""}`}
+                aria-pressed={autoScan}
+                onClick={() => setAutoScan((value) => !value)}
+              >
+                AUTO-SCAN
+              </button>
+            </div>
+            <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
+              <span className="field-label">CAP</span>
+              <strong>{searchCreditCapLabel}</strong>
+            </div>
+            {deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
               <div className="variant-row">
-                <span>VARIANTS</span>
-                {deepVariants.map((variant) => (
+                <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
+                {currentSanitizedVariants.variants.map((variant) => (
                   <span className="suggestion-chip" key={variant}>
                     <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
                     <button
@@ -790,7 +953,7 @@ function StageView({
                       type="button"
                       aria-label={`Remove ${variant}`}
                       title="Remove variant"
-                      onClick={() => setDeepVariants((items) => items.filter((item) => item !== variant))}
+                      onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}
                     >
                       x
                     </button>
@@ -804,6 +967,7 @@ function StageView({
               onPick={setSearchQuery}
               onDismiss={(term) => void dismissSuggestion(term)}
               searchedTerms={searchedTerms}
+              onLowPool={onOpenSeeds}
             />
             <button className="recent-toggle" type="button" onClick={() => setRecentOpen((value) => !value)}>
               Recent searches {recentOpen ? "hide" : "show"}
@@ -884,10 +1048,14 @@ function StageView({
               onBackToPool={stage === "shortlist" || stage === "watchlist" ? () => void patchStatus(channel, "candidate", "candidate") : undefined}
               onRestoreToPool={stage === "rejected" ? () => void patchStatus(channel, "candidate", "candidate") : undefined}
               onToggleKind={stage !== "rejected" ? () => void toggleKind(channel) : undefined}
-              onEnrich={stage === "pool" || stage === "watchlist" ? () => void enrichCard(channel) : undefined}
+              onEnrich={stage !== "rejected" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
+              onSponsorScan={stage !== "rejected" ? () => void scanSponsors(channel) : undefined}
+              sponsorScan={sponsorScans[channel.channel_id]}
+              sponsorScanLoading={scanningSponsorId === channel.channel_id}
               tab={stage}
               highlighted={highlightIds.has(channel.channel_id)}
+              newArrival={newArrivalIds.has(channel.channel_id)}
             />
           ))}
         </div>
@@ -897,6 +1065,16 @@ function StageView({
           channel={outreachChannel}
           onClose={() => setOutreachChannel(null)}
           onSubmit={(body) => void handleOutreachLog(body)}
+        />
+      )}
+      {sponsorScanTarget && (
+        <SponsorScanDialog
+          channel={sponsorScanTarget.channel}
+          summary={sponsorScanTarget.summary}
+          loading={scanningSponsorId === sponsorScanTarget.channel.channel_id}
+          onClose={() => setSponsorScanTarget(null)}
+          onRescan={() => void scanSponsors(sponsorScanTarget.channel)}
+          onDeepHistory={() => void scanSponsorsDeepHistory(sponsorScanTarget.channel)}
         />
       )}
     </section>
@@ -918,6 +1096,9 @@ function OutreachView({
   const [closed, setClosed] = useState<ChannelCardRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
+  const [sponsorScans, setSponsorScans] = useState<SponsorScanState>({});
+  const [sponsorScanTarget, setSponsorScanTarget] = useState<SponsorScanTarget | null>(null);
+  const [scanningSponsorId, setScanningSponsorId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -959,6 +1140,19 @@ function OutreachView({
     }
   }
 
+  async function enrichCard(channel: ChannelCardRow) {
+    try {
+      const result = await api.enrich({ scope: "channel", channel_id: channel.channel_id, limit: 1 });
+      await load();
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"}: ${enrichToastMessage(result)}`,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  }
+
   async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
     if (!outreachChannel) return;
     const channel = outreachChannel;
@@ -986,6 +1180,22 @@ function OutreachView({
     }
   }
 
+  async function scanSponsors(channel: ChannelCardRow) {
+    setScanningSponsorId(channel.channel_id);
+    try {
+      const summary = await api.sponsorScan(channel.channel_id);
+      setSponsorScans((scans) => ({ ...scans, [channel.channel_id]: summary }));
+      setSponsorScanTarget({ channel, summary });
+      onToast({
+        message: `${channel.title ?? "Channel"} sponsor scan complete: ${summary.sponsoredCount} of ${summary.totalScanned}.`,
+      });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setScanningSponsorId(null);
+    }
+  }
+
   return (
     <section className="view">
       <div className="stage-heading clipped">
@@ -1007,6 +1217,10 @@ function OutreachView({
               onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
               onBackToPool={channel.status !== "candidate" ? () => void patchStatus(channel, "candidate", `${channel.title ?? "Channel"} returned to Pool.`) : undefined}
               onToggleSeed={() => void toggleSeed(channel)}
+              onEnrich={() => void enrichCard(channel)}
+              onSponsorScan={() => void scanSponsors(channel)}
+              sponsorScan={sponsorScans[channel.channel_id]}
+              sponsorScanLoading={scanningSponsorId === channel.channel_id}
               tab="outreach"
             />
           ))}
@@ -1025,6 +1239,10 @@ function OutreachView({
                 showStatus
                 onLogOutreach={() => setOutreachChannel(channel)}
                 onToggleSeed={channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
+                onEnrich={() => void enrichCard(channel)}
+                onSponsorScan={() => void scanSponsors(channel)}
+                sponsorScan={sponsorScans[channel.channel_id]}
+                sponsorScanLoading={scanningSponsorId === channel.channel_id}
                 tab="outreach"
               />
             ))}
@@ -1036,6 +1254,15 @@ function OutreachView({
           channel={outreachChannel}
           onClose={() => setOutreachChannel(null)}
           onSubmit={(body) => void handleOutreachLog(body)}
+        />
+      )}
+      {sponsorScanTarget && (
+        <SponsorScanDialog
+          channel={sponsorScanTarget.channel}
+          summary={sponsorScanTarget.summary}
+          loading={scanningSponsorId === sponsorScanTarget.channel.channel_id}
+          onClose={() => setSponsorScanTarget(null)}
+          onRescan={() => void scanSponsors(sponsorScanTarget.channel)}
         />
       )}
     </section>
@@ -1492,38 +1719,86 @@ function BrandsView({
       ) : (
         <div className="card-grid">
           {brands.map((brand) => (
-            <article className="channel-card clipped" key={brand.channel_id}>
-              <div className="card-head seed-head">
-                <div className="thumb-fallback large">{(brand.title ?? brand.handle ?? "?").charAt(0).toUpperCase()}</div>
-                <div>
-                  <a className="channel-title" href={`https://youtube.com/channel/${brand.channel_id}`} target="_blank" rel="noreferrer">
-                    {brand.title ?? brand.channel_id}
-                  </a>
-                  <div className="muted">{brand.handle ? `@${brand.handle}` : ""}</div>
-                </div>
-              </div>
-              <div className="card-metrics">
-                <span>{compact(brand.subscriber_count)} subs</span>
-                <span className="chip kind-brand">brand</span>
-                {brand.country && <span className="chip">{brand.country}</span>}
-              </div>
-              <div className="meta-line">
-                {brand.source_seed_title && <span>seed: {brand.source_seed_title}</span>}
-              </div>
-              <IconLinks links={brand.links.map((url) => ({ type: "link", label: linkLabel(url), url }))} />
-              <div className="card-actions">
-                <button onClick={() => void patchBrand(brand, { kind: "creator", status: "candidate", is_seed: false }, `${brand.title ?? "Channel"} returned to Pool.`)}>
-                  Not a brand
-                </button>
-                <button onClick={() => void patchBrand(brand, { status: "rejected" }, `${brand.title ?? "Brand"} rejected.`)}>
-                  Reject
-                </button>
-              </div>
-            </article>
+            <BrandCard
+              key={brand.channel_id}
+              brand={brand}
+              onNotBrand={() => void patchBrand(brand, { kind: "creator", status: "candidate", is_seed: false }, `${brand.title ?? "Channel"} returned to Pool.`)}
+              onReject={() => void patchBrand(brand, { status: "rejected" }, `${brand.title ?? "Brand"} rejected.`)}
+            />
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function BrandCard({
+  brand,
+  onNotBrand,
+  onReject,
+}: {
+  brand: BrandRow;
+  onNotBrand: () => void;
+  onReject: () => void;
+}) {
+  const [linksOpen, setLinksOpen] = useState(false);
+  const links = brand.links.map((url) => ({ label: brandLinkLabel(url), url }));
+  const visibleLinks = linksOpen ? links : links.slice(0, 4);
+  const hiddenCount = Math.max(0, links.length - visibleLinks.length);
+  const sponsorStats = sponsorStatsFromRollup(brand);
+  const hasStats = hasMetricValue(brand.subscriber_count) || Boolean(brand.country) || Boolean(sponsorStats);
+
+  return (
+    <article className="channel-card brand-card clipped">
+      <div className="card-head">
+        <div className="thumb-fallback large">{(brand.title ?? brand.handle ?? "?").charAt(0).toUpperCase()}</div>
+        <div className="card-identity">
+          <a className="channel-title" href={`https://youtube.com/channel/${brand.channel_id}`} target="_blank" rel="noreferrer">
+            {brand.title ?? brand.channel_id}
+          </a>
+          <div className="muted">{brand.handle ? `@${brand.handle}` : "no handle"}</div>
+        </div>
+        <div className="score score-mid brand-score" title="Brand intelligence">BR</div>
+      </div>
+      {hasStats && (
+        <div className="stat-grid">
+          {hasMetricValue(brand.subscriber_count) && <CardStat label="subs" value={compact(brand.subscriber_count)} />}
+          {brand.country && <CardStat label="country" value={brand.country} />}
+          {sponsorStats && (
+            <CardStat
+              label="sponsors"
+              value={sponsorStats.hasSignals ? `${Math.round(sponsorStats.rate * 100)}%` : "?"}
+              title={
+                sponsorStats.hasSignals
+                  ? `${sponsorStats.sponsoredCount} of ${sponsorStats.totalScanned} recent videos`
+                  : "scanned, no signals found. Unconfirmed, not unsponsored."
+              }
+              className={sponsorStats.hasSignals ? undefined : "muted-stat"}
+            />
+          )}
+        </div>
+      )}
+      <div className="status-chip-row">
+        <span className="chip kind-brand">brand</span>
+      </div>
+      {brand.source_seed_title && (
+        <div className="provenance-line">seed: {brand.source_seed_title}</div>
+      )}
+      {links.length > 0 && (
+        <div className="card-footer">
+          <BrandLinks
+            links={visibleLinks}
+            hiddenCount={hiddenCount}
+            expanded={linksOpen}
+            onToggle={() => setLinksOpen((value) => !value)}
+          />
+        </div>
+      )}
+      <div className="card-actions">
+        <button onClick={onNotBrand}>Not a brand</button>
+        <button onClick={onReject}>Reject</button>
+      </div>
+    </article>
   );
 }
 
@@ -1539,8 +1814,12 @@ function ChannelCard({
   onToggleKind,
   onEnrich,
   onLogOutreach,
+  onSponsorScan,
+  sponsorScan,
+  sponsorScanLoading = false,
   tab,
   highlighted = false,
+  newArrival = false,
   stale = false,
 }: {
   channel: ChannelCardRow;
@@ -1554,8 +1833,12 @@ function ChannelCard({
   onToggleKind?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
+  onSponsorScan?: () => void;
+  sponsorScan?: SponsorScanSummary;
+  sponsorScanLoading?: boolean;
   tab?: Tab;
   highlighted?: boolean;
+  newArrival?: boolean;
   stale?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -1571,12 +1854,21 @@ function ChannelCard({
     onToggleKind,
     onEnrich,
     onLogOutreach,
+    onSponsorScan,
+    sponsorScanLoading,
+    enrichFreshDays: enrichmentFreshDays(channel),
   });
   const primaryAction = actions.find((action) => action.primary);
   const secondaryActions = actions.filter((action) => action.visibleSecondary);
   const overflowActions = actions.filter((action) => !action.primary && !action.visibleSecondary);
   const provenance = provenanceText(channel);
   const statusVisible = showStatus && !statusRedundantForTab(tab, channel.status);
+  const hasRecentViews = channel.median_recent_views !== null && channel.median_recent_views !== undefined;
+  const provenanceItems = provenanceLine(channel, provenance);
+  const footerDates = footerDateLine(channel);
+  const hasFooter = channel.contact_links.length > 0 || footerDates.length > 0;
+  const sponsorStats = sponsorStatsForCard(channel, sponsorScan);
+  const hasStats = hasMetricValue(channel.subscriber_count) || hasRecentViews || Boolean(sponsorStats);
 
   return (
     <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
@@ -1586,7 +1878,7 @@ function ChannelCard({
           title={channel.title ?? channel.handle ?? channel.channel_id}
           size="large"
         />
-        <div>
+        <div className="card-identity">
           <a className="channel-title" href={`https://youtube.com/channel/${channel.channel_id}`} target="_blank" rel="noreferrer">
             {channel.title ?? channel.channel_id}
           </a>
@@ -1600,33 +1892,55 @@ function ChannelCard({
           {channel.score?.toFixed(0) ?? "--"}
         </button>
       </div>
-      <div className="card-metrics">
-        <span>{compact(channel.subscriber_count)} subs</span>
+      {hasStats && (
+        <div className="stat-grid">
+          {hasMetricValue(channel.subscriber_count) && <CardStat label="subs" value={compact(channel.subscriber_count)} />}
+          {hasRecentViews && (
+            <>
+              <CardStat label="views / video" value={`~${compact(channel.median_recent_views)}`} title="median views across recent uploads" />
+              <CardStat label="reach" value={effectiveReach(channel).toFixed(2)} />
+            </>
+          )}
+          {sponsorStats && (
+            <CardStat
+              label="sponsors"
+              value={sponsorStats.hasSignals ? `${Math.round(sponsorStats.rate * 100)}%` : "?"}
+              title={
+                sponsorStats.hasSignals
+                  ? `${sponsorStats.sponsoredCount} of ${sponsorStats.totalScanned} recent videos`
+                  : "scanned, no signals found. Unconfirmed, not unsponsored."
+              }
+              className={sponsorStats.hasSignals ? undefined : "muted-stat"}
+            />
+          )}
+        </div>
+      )}
+      <div className="status-chip-row">
         <span className={`chip kind-chip kind-${channel.kind}`}>{channel.kind}</span>
-        <span className="chip">{channel.discovered_via}</span>
         {statusVisible && <span className="chip status-chip">{channel.status}</span>}
-        {provenance && <span className="chip provenance-chip">{provenance}</span>}
-        {channel.median_recent_views !== null && channel.median_recent_views !== undefined && (
-          <span className="chip views-chip" title="median views across recent uploads">
-            ~{compact(channel.median_recent_views)} / VIDEO <em>REACH {effectiveReach(channel).toFixed(2)}</em>
-          </span>
-        )}
         {hotChannel(channel) && <span className="chip hot-chip">HOT</span>}
+        {newArrival && <span className="chip new-chip">NEW</span>}
         {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
         {stale && <span className="chip stale-chip">STALE</span>}
         {channel.outreach_status && channel.outreach_status !== "none" && (
           <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
         )}
+        <GrowthChipItems row={channel} />
       </div>
-      <GrowthChips row={channel} />
+      {provenanceItems.length > 0 && (
+        <div className="provenance-line">
+          {provenanceItems.join(" / ")}
+        </div>
+      )}
       <Sparkline points={channel.snapshots ?? []} />
-      <div className="meta-line">
-        {channel.search_query && <span>query: {channel.search_query}</span>}
-        {channel.kind_reason && channel.status === "rejected" && <span>{channel.kind_reason}</span>}
-        {channel.last_upload_at && <span>last upload {daysAgo(channel.last_upload_at)}d ago</span>}
-        {channel.next_followup_at && <span>follow up {shortDate(channel.next_followup_at)}</span>}
-      </div>
-      <IconLinks links={channel.contact_links} />
+      {hasFooter && (
+        <div className="card-footer">
+          <IconLinks links={channel.contact_links} />
+          {footerDates.length > 0 && (
+            <div className="footer-dates">{footerDates.join(" / ")}</div>
+          )}
+        </div>
+      )}
       {open && <ScoreTable breakdown={channel.score_breakdown} />}
       {actions.length > 0 && (
         <div className="card-actions">
@@ -1636,25 +1950,117 @@ function ChannelCard({
             </button>
           )}
           {secondaryActions.map((action) => (
-            <button key={action.key} className={`secondary-action ${action.className ?? ""}`} onClick={action.onClick} title={action.title}>
+            <button key={action.key} className={`secondary-action ${action.className ?? ""}`} onClick={action.onClick} title={action.title} disabled={action.disabled}>
               {action.label}
             </button>
           ))}
           {overflowActions.length > 0 && (
-            <details className="action-overflow">
-              <summary aria-label="More actions" title="More actions">...</summary>
-              <div className="overflow-list">
-                {overflowActions.map((action) => (
-                  <button key={action.key} className={action.className} onClick={action.onClick} title={action.title}>
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </details>
+            <OverflowMenu actions={overflowActions} />
           )}
         </div>
       )}
     </article>
+  );
+}
+
+function OverflowMenu({ actions }: { actions: CardAction[] }) {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const positionMenu = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setAnchor({
+      top: Math.max(8, rect.top),
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  }, []);
+
+  const setMenuNode = useCallback((node: HTMLDivElement | null) => {
+    menuRef.current = node;
+    if (node && anchor) {
+      node.style.setProperty("--menu-top", `${anchor.top}px`);
+      node.style.setProperty("--menu-right", `${anchor.right}px`);
+    }
+  }, [anchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    positionMenu();
+  }, [open, positionMenu]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function closeOnOutside(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    function closeOnViewportChange() {
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [open]);
+
+  return (
+    <div className="action-overflow">
+      <button
+        ref={buttonRef}
+        className="overflow-trigger"
+        type="button"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        onClick={() => {
+          if (!open) positionMenu();
+          setOpen((value) => !value);
+        }}
+      >
+        ...
+      </button>
+      {open && anchor && createPortal(
+        <div className="overflow-list overflow-portal" ref={setMenuNode} role="menu">
+          {actions.map((action) => (
+            <button
+              key={action.key}
+              className={action.className}
+              onClick={() => {
+                if (action.disabled) return;
+                setOpen(false);
+                action.onClick();
+              }}
+              title={action.title}
+              disabled={action.disabled}
+              role="menuitem"
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
   );
 }
 
@@ -1666,6 +2072,7 @@ type CardAction = {
   visibleSecondary?: boolean;
   className?: string;
   title?: string;
+  disabled?: boolean;
 };
 
 function cardActions({
@@ -1680,6 +2087,9 @@ function cardActions({
   onToggleKind,
   onEnrich,
   onLogOutreach,
+  onSponsorScan,
+  sponsorScanLoading,
+  enrichFreshDays,
 }: {
   channel: ChannelCardRow;
   tab?: Tab;
@@ -1692,6 +2102,9 @@ function cardActions({
   onToggleKind?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
+  onSponsorScan?: () => void;
+  sponsorScanLoading?: boolean;
+  enrichFreshDays?: number | null;
 }): CardAction[] {
   const actions: CardAction[] = [];
   if (onShortlist) {
@@ -1703,9 +2116,14 @@ function cardActions({
     });
   }
   if (onLogOutreach) {
+    const updateOutreach =
+      tab === "outreach" &&
+      (channel.outreach_status === "sent" ||
+        channel.outreach_status === "replied" ||
+        channel.outreach_status === "in_talks");
     actions.push({
       key: "outreach",
-      label: "Log outreach",
+      label: updateOutreach ? "Update status" : "Log outreach",
       onClick: onLogOutreach,
       primary: tab === "shortlist" || tab === "outreach",
     });
@@ -1736,7 +2154,26 @@ function cardActions({
       onClick: onToggleKind,
     });
   }
-  if (onEnrich) actions.push({ key: "enrich", label: "Enrich", onClick: onEnrich, title: "Enrich activity" });
+  if (onEnrich) {
+    const disabled = enrichFreshDays !== null && enrichFreshDays !== undefined;
+    actions.push({
+      key: "enrich",
+      label: "Enrich",
+      onClick: onEnrich,
+      title: disabled ? `enriched ${enrichFreshDays}d ago` : "Enrich activity",
+      disabled,
+    });
+  }
+  if (onSponsorScan) {
+    actions.push({
+      key: "sponsor-scan",
+      label: sponsorScanLoading ? "Scanning..." : "Scan sponsors",
+      onClick: onSponsorScan,
+      className: sponsorScanLoading ? "active-action" : undefined,
+      title: "Scan recent videos for SponsorBlock signals",
+      disabled: sponsorScanLoading,
+    });
+  }
 
   return actions;
 }
@@ -1757,6 +2194,96 @@ function provenanceText(channel: ChannelCardRow): string | null {
   return parts.length ? parts.join(" / ") : null;
 }
 
+function provenanceLine(channel: ChannelCardRow, provenance: string | null): string[] {
+  const parts: string[] = [];
+  if (provenance) parts.push(provenance);
+  if (channel.search_query) parts.push(`query: ${channel.search_query}`);
+  if (channel.discovered_via) parts.push(`via ${channel.discovered_via}`);
+  if (channel.kind_reason && channel.status === "rejected") parts.push(channel.kind_reason);
+  return parts;
+}
+
+function footerDateLine(channel: ChannelCardRow): string[] {
+  const parts: string[] = [];
+  if (channel.last_upload_at) parts.push(`last upload ${daysAgo(channel.last_upload_at)}d ago`);
+  if (channel.next_followup_at) parts.push(`follow up ${shortDate(channel.next_followup_at)}`);
+  return parts;
+}
+
+function CardStat({ label, value, title, className }: { label: string; value: string; title?: string; className?: string }) {
+  return (
+    <div className={`stat-block ${className ?? ""}`} title={title}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function sponsorStatsForCard(channel: ChannelCardRow, scan?: SponsorScanSummary): {
+  rate: number;
+  sponsoredCount: number;
+  totalScanned: number;
+  lastSponsoredDate: string | null;
+  hasSignals: boolean;
+} | null {
+  if (scan && scan.scans.length > 0) {
+    return {
+      rate: scan.sponsorshipRate,
+      sponsoredCount: scan.sponsoredCount,
+      totalScanned: scan.totalScanned,
+      lastSponsoredDate: scan.lastSponsoredDate,
+      hasSignals: scan.sponsoredCount > 0,
+    };
+  }
+
+  return sponsorStatsFromRollup(channel);
+}
+
+function sponsorStatsFromRollup(channel: {
+  sponsor_scan_sponsored: number;
+  sponsorship_rate: number | null;
+  sponsor_scan_total: number;
+  last_sponsored_date: string | null;
+  sponsor_scan_scanned_at?: string | null;
+}): {
+  rate: number;
+  sponsoredCount: number;
+  totalScanned: number;
+  lastSponsoredDate: string | null;
+  hasSignals: boolean;
+} | null {
+  if (channel.sponsor_scan_scanned_at && channel.sponsorship_rate !== null) {
+    return {
+      rate: channel.sponsorship_rate,
+      sponsoredCount: channel.sponsor_scan_sponsored,
+      totalScanned: channel.sponsor_scan_total,
+      lastSponsoredDate: channel.last_sponsored_date,
+      hasSignals: channel.sponsor_scan_sponsored > 0,
+    };
+  }
+
+  return null;
+}
+
+function sponsorScanFresh(channel: { sponsor_scan_scanned_at?: string | null }): boolean {
+  if (!channel.sponsor_scan_scanned_at) return false;
+  const scannedAt = Date.parse(channel.sponsor_scan_scanned_at);
+  if (Number.isNaN(scannedAt)) return false;
+  return Date.now() - scannedAt < 7 * 24 * 60 * 60 * 1000;
+}
+
+function enrichmentFreshDays(channel: { enriched_at?: string | null }): number | null {
+  if (!channel.enriched_at) return null;
+  const enrichedAt = Date.parse(channel.enriched_at);
+  if (Number.isNaN(enrichedAt)) return null;
+  const days = Math.max(0, Math.floor((Date.now() - enrichedAt) / (24 * 60 * 60 * 1000)));
+  return days < 7 ? days : null;
+}
+
+function hasMetricValue(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function OutreachDialog({
   channel,
   onClose,
@@ -1769,9 +2296,13 @@ function OutreachDialog({
   const [outreachStatus, setOutreachStatus] = useState<OutreachStatus>(
     channel.outreach_status && channel.outreach_status !== "none" ? channel.outreach_status : "sent",
   );
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(channel.latest_outreach_note ?? "");
   const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : "");
   const closed = outreachStatus === "signed" || outreachStatus === "passed" || outreachStatus === "ghosted";
+  const updating =
+    channel.outreach_status === "sent" ||
+    channel.outreach_status === "replied" ||
+    channel.outreach_status === "in_talks";
 
   useEffect(() => {
     if (closed) setNextFollowup("");
@@ -1781,6 +2312,9 @@ function OutreachDialog({
     <div className="dialog-backdrop" role="presentation">
       <form
         className="dialog clipped outreach-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={updating ? "Update outreach status" : "Log outreach"}
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit({
@@ -1790,23 +2324,41 @@ function OutreachDialog({
           });
         }}
       >
-        <h2>Log outreach</h2>
-        <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
-        <label>
-          Status
-          <select value={outreachStatus} onChange={(event) => setOutreachStatus(event.target.value as OutreachStatus)}>
+        <div className="dialog-header">
+          <div>
+            <h2>{updating ? "Update status" : "Log outreach"}</h2>
+            <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+          </div>
+        </div>
+        <label className="outreach-field">
+          <span>Status</span>
+          <select className="outreach-control" value={outreachStatus} onChange={(event) => setOutreachStatus(event.target.value as OutreachStatus)}>
             {OUTREACH_OPTIONS.map((option) => (
               <option key={option} value={option}>{outreachLabel(option)}</option>
             ))}
           </select>
         </label>
-        <label>
-          Note
-          <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="sent intro, replied with rates, follow-up context..." required />
+        <label className="outreach-field">
+          <span>Note</span>
+          <textarea
+            className="outreach-control"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="sent intro, replied with rates, follow-up context..."
+            required
+          />
         </label>
-        <label>
-          Next follow-up <span className="optional">optional</span>
-          <input type="date" value={nextFollowup} onChange={(event) => setNextFollowup(event.target.value)} disabled={closed} />
+        <label className="outreach-field">
+          <span>
+            Next follow-up <em className="optional">optional</em>
+          </span>
+          <input
+            className="outreach-control"
+            type="date"
+            value={nextFollowup}
+            onChange={(event) => setNextFollowup(event.target.value)}
+            disabled={closed}
+          />
         </label>
         {outreachStatus === "signed" && !channel.is_seed && (
           <p className="dialog-hint">Signed channels will offer a one-click seed prompt after logging.</p>
@@ -1816,6 +2368,139 @@ function OutreachDialog({
           <button type="button" onClick={onClose}>Cancel</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function SponsorScanDialog({
+  channel,
+  summary,
+  loading,
+  onClose,
+  onRescan,
+  onDeepHistory,
+}: {
+  channel: ChannelCardRow;
+  summary: SponsorScanSummary;
+  loading: boolean;
+  onClose: () => void;
+  onRescan: () => void;
+  onDeepHistory?: () => void;
+}) {
+  const cachedAt = summary.scans[0]?.scanned_at ?? null;
+  const sponsoredLabel = `${summary.sponsoredCount} of ${summary.totalScanned} recent videos`;
+  const coverageLabel = summary.coverageLabel ?? sponsoredLabel;
+  const sponsoredVideos = summary.scans.filter((scan) => scan.verdict === "sponsored");
+  const [blockedSponsoredUrls, setBlockedSponsoredUrls] = useState<Array<{ title: string; url: string }>>([]);
+
+  function openSponsoredVideos() {
+    if (sponsoredVideos.length === 0) return;
+    setBlockedSponsoredUrls([]);
+    if (
+      sponsoredVideos.length > 15 &&
+      !window.confirm(`Open ${sponsoredVideos.length} sponsored videos in new tabs?`)
+    ) {
+      return;
+    }
+
+    const blocked: Array<{ title: string; url: string }> = [];
+    for (const scan of sponsoredVideos) {
+      const url = `https://youtube.com/watch?v=${encodeURIComponent(scan.video_id)}`;
+      const opened = window.open("about:blank", "_blank");
+      if (!opened) {
+        blocked.push({ title: scan.video_title ?? scan.video_id, url });
+        continue;
+      }
+
+      opened.opener = null;
+      opened.location.href = url;
+    }
+    setBlockedSponsoredUrls(blocked);
+  }
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div className="dialog clipped sponsor-dialog" role="dialog" aria-modal="true" aria-label="Sponsor scan results">
+        <div className="sponsor-dialog-head">
+          <div>
+            <h2>Sponsor scan</h2>
+            <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+          </div>
+          <button type="button" onClick={onClose}>Close</button>
+        </div>
+        <div className="sponsor-rollup">
+          <span className="chip sponsor-chip">SPONSORSHIP RATE {Math.round(summary.sponsorshipRate * 100)}%</span>
+          <span className="chip">{coverageLabel}</span>
+          <span className="chip">LAST {summary.lastSponsoredDate ? shortDate(summary.lastSponsoredDate) : "NONE"}</span>
+          {cachedAt && (
+            <span className="chip">CACHED {shortDateTime(cachedAt)}</span>
+          )}
+          {summary.cached && (
+            <button type="button" onClick={onRescan} disabled={loading}>
+              {loading ? "Scanning..." : "Re-scan"}
+            </button>
+          )}
+          <button type="button" onClick={openSponsoredVideos} disabled={sponsoredVideos.length === 0}>
+            Open {sponsoredVideos.length} sponsored
+          </button>
+          {onDeepHistory && (
+            <button type="button" onClick={onDeepHistory} disabled={loading} title="Uses one ScrapeCreators channel-videos page, then SponsorBlock only">
+              {loading ? "Scanning..." : "Deep history (1 credit)"}
+            </button>
+          )}
+        </div>
+        {summary.sponsoredCount === 0 && (
+          <p className="scan-empty">
+            No signals found. Unconfirmed, not unsponsored. Thin coverage is common on smaller channels.
+          </p>
+        )}
+        {blockedSponsoredUrls.length > 0 && (
+          <div className="scan-open-fallback">
+            <strong>{blockedSponsoredUrls.length} tab{blockedSponsoredUrls.length === 1 ? "" : "s"} blocked</strong>
+            <span>Open the remaining sponsored videos manually:</span>
+            {blockedSponsoredUrls.map((item) => (
+              <a key={item.url} href={item.url} target="_blank" rel="noopener noreferrer">
+                {item.title}
+              </a>
+            ))}
+          </div>
+        )}
+        <div className="scan-table-wrap">
+          <table className="data-table scan-table">
+            <thead>
+              <tr>
+                <th>Video</th>
+                <th>Published</th>
+                <th>Verdict</th>
+                <th>Segments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.scans.map((scan) => (
+                <tr key={`${scan.scanned_at}-${scan.video_id}`}>
+                  <td>
+                    <a href={`https://youtube.com/watch?v=${scan.video_id}`} target="_blank" rel="noopener noreferrer">
+                      {scan.video_title ?? scan.video_id}
+                    </a>
+                    {scan.error && <div className="scan-error">{scan.error}</div>}
+                  </td>
+                  <td>{scan.published_at ? shortDate(scan.published_at) : "--"}</td>
+                  <td>
+                    <span className={`chip verdict-chip ${scan.verdict === "sponsored" ? "hot-chip" : "unknown-chip"}`}>
+                      {scan.verdict === "sponsored" ? "SPONSORED" : "UNKNOWN"}
+                    </span>
+                  </td>
+                  <td>
+                    {scan.verdict === "sponsored"
+                      ? `${durationLabel(scan.totalDurationSeconds)} of sponsor segments`
+                      : "--"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1912,18 +2597,25 @@ function GrowthChips({ row }: { row: Partial<GrowthRow> }) {
     || row.subs_growth_30d !== null && row.subs_growth_30d !== undefined
     || row.views_growth_30d !== null && row.views_growth_30d !== undefined;
   const snapshotCount = row.snapshots?.length ?? 0;
+  if (!hasGrowth && snapshotCount === 0) return null;
+  return <div className="growth-row"><GrowthChipItems row={row} /></div>;
+}
+
+function GrowthChipItems({ row }: { row: Partial<GrowthRow> }) {
+  const hasGrowth = row.subs_growth_7d !== null && row.subs_growth_7d !== undefined
+    || row.subs_growth_30d !== null && row.subs_growth_30d !== undefined
+    || row.views_growth_30d !== null && row.views_growth_30d !== undefined;
+  const snapshotCount = row.snapshots?.length ?? 0;
 
   if (!hasGrowth) {
     if (snapshotCount === 0) return null;
     return (
-      <div className="growth-row">
-        <span className="chip tracking-chip">TRACKING ({row.tracking_days ?? 0}d)</span>
-      </div>
+      <span className="chip tracking-chip">TRACKING ({row.tracking_days ?? 0}d)</span>
     );
   }
 
   return (
-    <div className="growth-row">
+    <>
       {row.subs_growth_7d !== null && row.subs_growth_7d !== undefined && (
         <span className="chip growth-chip">SUBS 7D {formatPercent(row.subs_growth_7d)}</span>
       )}
@@ -1933,7 +2625,7 @@ function GrowthChips({ row }: { row: Partial<GrowthRow> }) {
       {row.views_growth_30d !== null && row.views_growth_30d !== undefined && (
         <span className="chip growth-chip dim">VIEWS 30D {formatPercent(row.views_growth_30d)}</span>
       )}
-    </div>
+    </>
   );
 }
 
@@ -2063,7 +2755,7 @@ function RunSummary({ summary }: { summary: SearchSummary }) {
   );
 }
 
-function SuggestionRows({
+function LegacySuggestionRows({
   topics,
   content,
   onPick,
@@ -2082,6 +2774,168 @@ function SuggestionRows({
       <SuggestionRow label="TOPICS" suggestions={topics} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
       <SuggestionRow label="CONTENT" suggestions={content} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
     </div>
+  );
+}
+
+function SuggestionRows({
+  topics,
+  content,
+  onPick,
+  onDismiss,
+  searchedTerms,
+  onLowPool,
+}: {
+  topics: SearchSuggestion[];
+  content: SearchSuggestion[];
+  onPick: (term: string) => void;
+  onDismiss: (term: string) => void;
+  searchedTerms: Set<string>;
+  onLowPool: () => void;
+}) {
+  const [searchedOpen, setSearchedOpen] = useState(false);
+  const topicGroups = splitSearchedSuggestions(topics, searchedTerms);
+  const contentGroups = splitSearchedSuggestions(content, searchedTerms);
+  const searchedSuggestions = uniqueSuggestions([
+    ...topicGroups.searched,
+    ...contentGroups.searched,
+  ]);
+  const unsearchedCount = topicGroups.unsearched.length + contentGroups.unsearched.length;
+
+  if (topics.length === 0 && content.length === 0) {
+    return (
+      <div className="suggestion-rows">
+        <QueryPoolPrompt onOpenSeeds={onLowPool} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="suggestion-rows">
+      <DiscoverySuggestionRow label="TOPICS" suggestions={topicGroups.unsearched} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
+      <DiscoverySuggestionRow label="CONTENT" suggestions={contentGroups.unsearched} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
+      {searchedSuggestions.length > 0 && (
+        <div className="suggestions searched-collapse">
+          <span className={`suggestion-chip searched-summary ${searchedOpen ? "active" : ""}`}>
+            <button type="button" onClick={() => setSearchedOpen((value) => !value)}>
+              {searchedSuggestions.length} searched
+            </button>
+          </span>
+          {searchedOpen && searchedSuggestions.map((suggestion) => (
+            <DiscoverySuggestionChip
+              key={`searched-${suggestion.term}`}
+              suggestion={suggestion}
+              label="SEARCHED"
+              searched
+              onPick={onPick}
+              onDismiss={onDismiss}
+            />
+          ))}
+        </div>
+      )}
+      {unsearchedCount < 5 && <QueryPoolPrompt onOpenSeeds={onLowPool} />}
+    </div>
+  );
+}
+
+function splitSearchedSuggestions(suggestions: SearchSuggestion[], searchedTerms: Set<string>) {
+  return suggestions.reduce<{ searched: SearchSuggestion[]; unsearched: SearchSuggestion[] }>((groups, suggestion) => {
+    if (searchedTerms.has(normalizeChipTerm(suggestion.term))) {
+      groups.searched.push(suggestion);
+    } else {
+      groups.unsearched.push(suggestion);
+    }
+    return groups;
+  }, { searched: [], unsearched: [] });
+}
+
+function uniqueSuggestions(suggestions: SearchSuggestion[]) {
+  const seen = new Set<string>();
+  const unique: SearchSuggestion[] = [];
+  for (const suggestion of suggestions) {
+    const key = normalizeChipTerm(suggestion.term);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(suggestion);
+  }
+  return unique;
+}
+
+function QueryPoolPrompt({ onOpenSeeds }: { onOpenSeeds: () => void }) {
+  return (
+    <div className="suggestions">
+      <span className="suggestion-chip query-pool-prompt">
+        <button type="button" onClick={onOpenSeeds} title="Open Seeds to regenerate query suggestions">
+          Query pool low. Regen from seeds
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function DiscoverySuggestionRow({
+  label: text,
+  suggestions,
+  onPick,
+  onDismiss,
+  searchedTerms,
+}: {
+  label: string;
+  suggestions: SearchSuggestion[];
+  onPick: (term: string) => void;
+  onDismiss: (term: string) => void;
+  searchedTerms: Set<string>;
+}) {
+  if (suggestions.length === 0) return null;
+  return (
+    <div className="suggestions">
+      <span>{text}</span>
+      {suggestions.slice(0, 12).map((suggestion) => (
+        <DiscoverySuggestionChip
+          key={`${text}-${suggestion.term}`}
+          suggestion={suggestion}
+          label={text}
+          searched={searchedTerms.has(normalizeChipTerm(suggestion.term))}
+          onPick={onPick}
+          onDismiss={onDismiss}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DiscoverySuggestionChip({
+  suggestion,
+  label,
+  searched,
+  onPick,
+  onDismiss,
+}: {
+  suggestion: SearchSuggestion;
+  label: string;
+  searched: boolean;
+  onPick: (term: string) => void;
+  onDismiss: (term: string) => void;
+}) {
+  return (
+    <span className={`suggestion-chip ${searched ? "searched" : ""}`} key={`${label}-${suggestion.term}`}>
+      <button
+        type="button"
+        title={`shared by ${suggestion.seed_count} seed${suggestion.seed_count === 1 ? "" : "s"}: ${suggestion.seeds.map((seed) => seed.title ?? seed.handle ?? seed.channel_id).join(", ")}`}
+        onClick={() => onPick(suggestion.term)}
+      >
+        {searched && <span aria-hidden="true">OK </span>}
+        {suggestion.term}
+      </button>
+      <button
+        className="suggestion-dismiss"
+        type="button"
+        aria-label={`Hide ${suggestion.term}`}
+        title="Hide suggestion"
+        onClick={() => onDismiss(suggestion.term)}
+      >
+        x
+      </button>
+    </span>
   );
 }
 
@@ -2358,7 +3212,7 @@ function Identity({ row }: { row: RawChannelRow }) {
 }
 
 function IconLinks({ links }: { links: Array<{ type: string; label: string; url: string }> }) {
-  if (links.length === 0) return <div className="icon-row empty">no contact links</div>;
+  if (links.length === 0) return null;
   return (
     <div className="icon-row">
       {links.map((link, index) => (
@@ -2366,6 +3220,33 @@ function IconLinks({ links }: { links: Array<{ type: string; label: string; url:
           {iconText(link.type)}
         </a>
       ))}
+    </div>
+  );
+}
+
+function BrandLinks({
+  links,
+  hiddenCount,
+  expanded,
+  onToggle,
+}: {
+  links: Array<{ label: string; url: string }>;
+  hiddenCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="brand-link-row">
+      {links.map((link) => (
+        <a key={link.url} className="brand-link-chip" href={link.url} target="_blank" rel="noopener noreferrer" title={link.url}>
+          {link.label}
+        </a>
+      ))}
+      {(hiddenCount > 0 || expanded) && (
+        <button type="button" className="brand-link-chip more" onClick={onToggle}>
+          {expanded ? "show less" : `+${hiddenCount} more`}
+        </button>
+      )}
     </div>
   );
 }
@@ -2530,6 +3411,13 @@ function compact(value: number | null | undefined): string {
   return String(value);
 }
 
+function durationLabel(seconds: number | null | undefined): string {
+  const totalSeconds = Math.max(0, Math.round(seconds ?? 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainder = totalSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
 function shortDate(value: string): string {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
 }
@@ -2584,8 +3472,8 @@ function formatPercent(value: number): string {
 
 function scoreTier(score: number | null): string {
   if (score === null) return "low";
-  if (score >= 85) return "high";
-  if (score >= 70) return "mid";
+  if (score >= 60) return "high";
+  if (score >= 45) return "mid";
   return "low";
 }
 
@@ -2595,25 +3483,6 @@ function enrichToastMessage(result: EnrichSummary): string {
   if (!breakdown) return base;
   if (breakdown.retry_credits === 0 && breakdown.other_credits === 0) return base;
   return `${base} Breakdown: ${breakdown.channel_video_pages} video page(s), ${breakdown.retry_credits} retry, ${breakdown.other_credits} other.`;
-}
-
-function generateDeepVariants(query: string, contentSuggestions: SearchSuggestion[]): string[] {
-  const base = normalizeQuery(query);
-  if (!base) return [];
-  const queryWords = new Set(base.split(/\s+/).filter((word) => word.length >= 3));
-  const related = contentSuggestions
-    .map((suggestion) => normalizeQuery(suggestion.term))
-    .filter((term) => term && term !== base)
-    .map((term) => ({
-      term,
-      overlap: term.split(/\s+/).filter((word) => queryWords.has(word)).length,
-      seedCount: contentSuggestions.find((suggestion) => normalizeQuery(suggestion.term) === term)?.seed_count ?? 0,
-    }))
-    .filter((item) => item.overlap > 0)
-    .sort((a, b) => b.overlap - a.overlap || b.seedCount - a.seedCount || a.term.localeCompare(b.term))
-    .map((item) => item.term);
-  const templated = [`${base} review`, `${base} how to`, `${base} vs`];
-  return uniqueTerms([...related, ...templated]).slice(0, 4);
 }
 
 type DroppedVariant = {
@@ -2798,6 +3667,17 @@ function linkLabel(url: string): string {
   } catch {
     return "link";
   }
+}
+
+function brandLinkLabel(url: string): string {
+  const host = linkLabel(url).toLowerCase();
+  if (host.includes("instagram")) return "instagram";
+  if (host.includes("tiktok")) return "tiktok";
+  if (host.includes("twitter") || host === "x.com") return "x";
+  if (host.includes("facebook")) return "facebook";
+  if (host.includes("youtube")) return "youtube";
+  if (host.includes("linktr.ee")) return "linktree";
+  return host || "link";
 }
 
 function searchedTermSet(searches: SearchRecord[]): Set<string> {

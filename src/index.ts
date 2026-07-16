@@ -47,6 +47,15 @@ import {
 import { computeGrowthMetrics, GrowthMetrics, SnapshotPoint } from "./lib/growth";
 import { planSnapshotRun, SNAPSHOT_CONFIG, SnapshotTargetState } from "./lib/snapshots";
 import { sanitizedContactLinks } from "./lib/links";
+import {
+  enrichVideosWithSponsorBlock,
+  getRecentVideoIds,
+  mergeSponsorVideoCoverage,
+  RecentVideosError,
+  sponsorCoverageLabel,
+  sponsorBlockTotalDurationSeconds,
+  SponsorBlockVideoScan,
+} from "./lib/sponsor-scan";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "rejected";
 type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
@@ -100,6 +109,8 @@ export default {
       const expandMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/expand$/);
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
       const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
+      const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
+      const sponsorScanDeepMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan\/deep-history$/);
 
       if (url.pathname === "/api/seeds" && request.method === "POST") {
         const auth = await requireAdmin(request, env);
@@ -173,6 +184,12 @@ export default {
         return listSearches(env);
       }
 
+      if (url.pathname === "/api/search/deep-variants" && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return deepSearchVariants(request, env);
+      }
+
       if (url.pathname === "/api/search/suggestions/blocklist" && request.method === "POST") {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
@@ -213,6 +230,18 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
+      }
+
+      if (sponsorScanMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return sponsorScan(decodeURIComponent(sponsorScanMatch[1]), env);
+      }
+
+      if (sponsorScanDeepMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return sponsorScanDeepHistory(decodeURIComponent(sponsorScanDeepMatch[1]), env);
       }
 
       if (patchChannelMatch && request.method === "PATCH") {
@@ -317,11 +346,13 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
     ).all<ChannelRow & { yield_count: number }>();
     const growth = await growthMapForChannels(env, results.map((row) => row.channel_id));
     const queryPhrases = await storedSeedQueryPhraseMap(env, results.map((row) => row.channel_id));
+    const sponsorRollups = await sponsorRollupMapForChannels(env, results.map((row) => row.channel_id));
 
     return json({
       channels: results.map((row) => ({
         ...row,
         ...growthFields(growth.get(row.channel_id)),
+        ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
         query_phrases: queryPhrases.get(row.channel_id) ?? [],
       })),
     });
@@ -337,11 +368,13 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
     .bind(requestedStatus)
     .all<ChannelRow>();
   const growth = await growthMapForChannels(env, results.map((row) => row.channel_id));
+  const sponsorRollups = await sponsorRollupMapForChannels(env, results.map((row) => row.channel_id));
 
   return json({
     channels: results.map((row) => ({
       ...row,
       ...growthFields(growth.get(row.channel_id)),
+      ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
     })),
   });
 }
@@ -536,6 +569,362 @@ async function logOutreach(
   });
 }
 
+async function sponsorScan(channelId: string, env: Env): Promise<Response> {
+  const existing = await env.SCOUT_DB.prepare(
+    "SELECT channel_id FROM channels WHERE channel_id = ?",
+  )
+    .bind(channelId)
+    .first<{ channel_id: string }>();
+  if (!existing) return json({ error: "Channel not found" }, 404);
+
+  const cached = await recentCachedVideoScans(env, channelId);
+  if (cached.length > 0) {
+    await logSponsorScanJob(env, {
+      idSource: "cache",
+      videoCount: cached.length,
+      cached: true,
+      sponsoredCount: sponsorScanRollup(cached).sponsoredCount,
+    });
+
+    return json(sponsorScanResponse({
+      channelId,
+      cached: true,
+      idSource: "cache",
+      rows: cached,
+    }));
+  }
+
+  try {
+    const resolved = await getRecentVideoIds(env, channelId);
+    const scannedAt = new Date().toISOString();
+    const scannedVideos = await enrichVideosWithSponsorBlock(resolved.videos);
+    const rows = await insertVideoScanRows(env, channelId, scannedVideos, scannedAt);
+    await logSponsorScanJob(env, {
+      idSource: resolved.source,
+      videoCount: rows.length,
+      cached: false,
+      sponsoredCount: sponsorScanRollup(rows).sponsoredCount,
+    });
+
+    return json(sponsorScanResponse({
+      channelId,
+      cached: false,
+      idSource: resolved.source,
+      rows,
+    }));
+  } catch (error) {
+    if (error instanceof RecentVideosError) {
+      await logSponsorScanJob(env, {
+        idSource: "error",
+        videoCount: 0,
+        cached: false,
+        error: error.message,
+      });
+      return json({ error: "sponsor_scan_video_ids_failed", message: error.message }, 502);
+    }
+
+    throw error;
+  }
+}
+
+const DEEP_SPONSOR_SCAN_VIDEO_CAP = 45;
+
+async function sponsorScanDeepHistory(channelId: string, env: Env): Promise<Response> {
+  const existing = await env.SCOUT_DB.prepare(
+    "SELECT channel_id FROM channels WHERE channel_id = ?",
+  )
+    .bind(channelId)
+    .first<{ channel_id: string }>();
+  if (!existing) return json({ error: "Channel not found" }, 404);
+
+  const client = new ScrapeCreatorsClient(env);
+  const page = await client.getChannelVideosPage(channelId);
+  const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const pageVideos = (Array.isArray(page.videos) ? page.videos : [])
+    .filter((video) => video.id)
+    .filter((video) => {
+      if (!video.publishedTime) return true;
+      const published = Date.parse(video.publishedTime);
+      return Number.isNaN(published) || published >= cutoff;
+    });
+  const priorCoverage = await latestDistinctSponsorScanVideos(env, channelId, 15);
+  const videos = mergeSponsorVideoCoverage(
+    priorCoverage,
+    pageVideos.map((video) => ({
+      video_id: video.id,
+      video_title: video.title ?? null,
+      published_at: video.publishedTime ?? null,
+    })),
+    DEEP_SPONSOR_SCAN_VIDEO_CAP,
+  );
+
+  if (videos.length === 0) {
+    await logSponsorScanJob(env, {
+      idSource: "deep_history",
+      videoCount: 0,
+      cached: false,
+      error: "ScrapeCreators channel-videos returned no videos inside the 12-month window.",
+    });
+    return json(
+      {
+        error: "sponsor_scan_deep_history_empty",
+        message: "ScrapeCreators channel-videos returned no videos inside the 12-month window.",
+      },
+      502,
+    );
+  }
+
+  await upsertVideos(env, channelId, pageVideos);
+  const scannedAt = new Date().toISOString();
+  const scannedVideos = await enrichVideosWithSponsorBlock(videos);
+  const rows = await insertVideoScanRows(env, channelId, scannedVideos, scannedAt);
+  await logSponsorScanJob(env, {
+    idSource: "deep_history",
+    videoCount: rows.length,
+    cached: false,
+    sponsoredCount: sponsorScanRollup(rows).sponsoredCount,
+  });
+
+  return json(sponsorScanResponse({
+    channelId,
+    cached: false,
+    idSource: "deep_history",
+    rows,
+    coverageLabel: sponsorCoverageLabel(rows),
+  }));
+}
+
+async function latestDistinctSponsorScanVideos(
+  env: Env,
+  channelId: string,
+  limit: number,
+): Promise<Array<{ video_id: string; video_title: string | null; published_at: string | null }>> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `WITH latest_per_video AS (
+      SELECT video_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      WHERE channel_id = ?
+      GROUP BY video_id
+    )
+    SELECT vs.video_id, vs.video_title, vs.published_at
+    FROM video_scans vs
+    INNER JOIN latest_per_video latest
+      ON latest.video_id = vs.video_id
+      AND latest.scanned_at = vs.scanned_at
+    WHERE vs.channel_id = ?
+    ORDER BY
+      CASE WHEN vs.published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(vs.published_at) DESC,
+      vs.id DESC
+    LIMIT ?`,
+  )
+    .bind(channelId, channelId, limit)
+    .all<{ video_id: string; video_title: string | null; published_at: string | null }>();
+
+  return results;
+}
+
+async function recentCachedVideoScans(
+  env: Env,
+  channelId: string,
+): Promise<VideoScanRow[]> {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const latest = await env.SCOUT_DB.prepare(
+    `SELECT MAX(scanned_at) AS scanned_at
+    FROM video_scans
+    WHERE channel_id = ?
+      AND scanned_at >= ?`,
+  )
+    .bind(channelId, cutoff)
+    .first<{ scanned_at: string | null }>();
+  if (!latest?.scanned_at) return [];
+
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT id,
+      channel_id,
+      video_id,
+      video_title,
+      published_at,
+      scanned_at,
+      sponsorblock_has_sponsor,
+      sponsorblock_segments_json,
+      error
+    FROM video_scans
+    WHERE channel_id = ?
+      AND scanned_at = ?
+    ORDER BY
+      CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(published_at) DESC,
+      id ASC`,
+  )
+    .bind(channelId, latest.scanned_at)
+    .all<VideoScanRow>();
+
+  return results.every((row) => row.sponsorblock_has_sponsor !== null || row.error)
+    ? results
+    : [];
+}
+
+async function insertVideoScanRows(
+  env: Env,
+  channelId: string,
+  videos: SponsorBlockVideoScan[],
+  scannedAt: string,
+): Promise<VideoScanRow[]> {
+  if (videos.length === 0) return [];
+
+  await env.SCOUT_DB.batch(
+    videos.map((video) =>
+      env.SCOUT_DB.prepare(
+        `INSERT INTO video_scans (
+          channel_id,
+          video_id,
+          video_title,
+          published_at,
+          scanned_at,
+          sponsorblock_has_sponsor,
+          sponsorblock_segments_json,
+          error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        channelId,
+        video.video_id,
+        video.video_title,
+        video.published_at,
+        scannedAt,
+        video.sponsorblock_has_sponsor,
+        video.sponsorblock_segments_json,
+        video.error,
+      ),
+    ),
+  );
+
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT id,
+      channel_id,
+      video_id,
+      video_title,
+      published_at,
+      scanned_at,
+      sponsorblock_has_sponsor,
+      sponsorblock_segments_json,
+      error
+    FROM video_scans
+    WHERE channel_id = ?
+      AND scanned_at = ?
+    ORDER BY
+      CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(published_at) DESC,
+      id ASC`,
+  )
+    .bind(channelId, scannedAt)
+    .all<VideoScanRow>();
+
+  return results;
+}
+
+async function logSponsorScanJob(
+  env: Env,
+  details: {
+    idSource: "stored" | "rss" | "cache" | "error" | "deep_history";
+    videoCount: number;
+    cached: boolean;
+    sponsoredCount?: number;
+    error?: string;
+  },
+): Promise<void> {
+  const now = new Date().toISOString();
+  const note = JSON.stringify({
+    id_source: details.idSource,
+    video_count: details.videoCount,
+    sponsored_count: details.sponsoredCount ?? null,
+    cached: details.cached,
+    error: details.error ?? null,
+  });
+
+  await env.SCOUT_DB.prepare(
+    `INSERT INTO jobs (
+      kind,
+      started_at,
+      finished_at,
+      channels_snapshotted,
+      credits_spent,
+      note
+    ) VALUES ('sponsor_scan', ?, ?, 0, 0, ?)`,
+  )
+    .bind(now, now, note)
+    .run();
+}
+
+function sponsorScanResponse({
+  channelId,
+  cached,
+  idSource,
+  rows,
+  coverageLabel,
+}: {
+  channelId: string;
+  cached: boolean;
+  idSource: "stored" | "rss" | "cache" | "deep_history";
+  rows: VideoScanRow[];
+  coverageLabel?: string;
+}): Record<string, unknown> {
+  const scans = rows.map(sponsorScanRow);
+  const rollup = sponsorScanRollup(rows);
+
+  return {
+    channel_id: channelId,
+    cached,
+    id_source: idSource,
+    video_count: rows.length,
+    coverageLabel: coverageLabel ?? `${rows.length} recent videos`,
+    totalScanned: rollup.totalScanned,
+    sponsoredCount: rollup.sponsoredCount,
+    sponsorshipRate: rollup.sponsorshipRate,
+    lastSponsoredDate: rollup.lastSponsoredDate,
+    totalSponsorSeconds: rollup.totalSponsorSeconds,
+    scans,
+  };
+}
+
+function sponsorScanRow(row: VideoScanRow): Record<string, unknown> {
+  const totalDurationSeconds = sponsorBlockTotalDurationSeconds(row.sponsorblock_segments_json);
+
+  return {
+    ...row,
+    sponsorblock_has_sponsor: row.sponsorblock_has_sponsor,
+    verdict: row.sponsorblock_has_sponsor === 1 ? "sponsored" : "unknown",
+    totalDurationSeconds,
+  };
+}
+
+function sponsorScanRollup(rows: VideoScanRow[]): {
+  totalScanned: number;
+  sponsoredCount: number;
+  sponsorshipRate: number;
+  lastSponsoredDate: string | null;
+  totalSponsorSeconds: number;
+} {
+  const sponsored = rows.filter((row) => row.sponsorblock_has_sponsor === 1);
+  const totalSponsorSeconds = Number(
+    sponsored
+      .reduce((sum, row) => sum + sponsorBlockTotalDurationSeconds(row.sponsorblock_segments_json), 0)
+      .toFixed(3),
+  );
+  const lastSponsoredDate = sponsored
+    .map((row) => row.published_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+
+  return {
+    totalScanned: rows.length,
+    sponsoredCount: sponsored.length,
+    sponsorshipRate: rows.length > 0 ? Number((sponsored.length / rows.length).toFixed(3)) : 0,
+    lastSponsoredDate,
+    totalSponsorSeconds,
+  };
+}
+
 async function shortlist(url: URL, env: Env): Promise<Response> {
   const minScore = parseNumberParam(url.searchParams.get("min_score"), 0, 0, 100);
   const kinds = parseKindList(url.searchParams.get("kind"));
@@ -554,11 +943,45 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
   const stageClause = shortlistStageClause(statusFilter, seedFilter);
 
   const { results } = await env.SCOUT_DB.prepare(
-    `SELECT
+    `WITH latest_scans AS (
+      SELECT channel_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      GROUP BY channel_id
+    ),
+    sponsor_rollups AS (
+      SELECT
+        vs.channel_id,
+        COUNT(*) AS sponsor_scan_total,
+        SUM(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN 1 ELSE 0 END) AS sponsor_scan_sponsored,
+        MAX(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN vs.published_at ELSE NULL END) AS sponsor_scan_last_sponsored,
+        MAX(vs.scanned_at) AS sponsor_scan_scanned_at
+      FROM video_scans vs
+      INNER JOIN latest_scans ls
+        ON ls.channel_id = vs.channel_id
+        AND ls.scanned_at = vs.scanned_at
+      GROUP BY vs.channel_id
+    ),
+    latest_outreach AS (
+      SELECT channel_id, note AS latest_outreach_note
+      FROM outreach_log
+      WHERE id IN (
+        SELECT MAX(id)
+        FROM outreach_log
+        GROUP BY channel_id
+      )
+    )
+    SELECT
       c.*,
-      s.title AS source_seed_title
+      s.title AS source_seed_title,
+      sr.sponsor_scan_total,
+      sr.sponsor_scan_sponsored,
+      sr.sponsor_scan_last_sponsored,
+      sr.sponsor_scan_scanned_at,
+      lo.latest_outreach_note
     FROM channels c
     LEFT JOIN channels s ON c.source_channel_id = s.channel_id
+    LEFT JOIN sponsor_rollups sr ON sr.channel_id = c.channel_id
+    LEFT JOIN latest_outreach lo ON lo.channel_id = c.channel_id
     WHERE ((? = 1 AND c.score IS NULL) OR c.score >= ?)
       AND c.kind IN (${kindPlaceholders})
       AND ${stageClause.sql}
@@ -584,7 +1007,7 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       outreachFilter,
       limit,
     )
-    .all<ChannelRow & { source_seed_title: string | null }>();
+    .all<ChannelSummaryRow>();
 
   const growth = await growthMapForChannels(env, results.map((row) => row.channel_id));
 
@@ -620,13 +1043,49 @@ async function outreachRows(
       c.last_touch_at ASC,
       c.updated_at ASC`;
   const { results } = await env.SCOUT_DB.prepare(
-    `SELECT c.*, s.title AS source_seed_title
+    `WITH latest_scans AS (
+      SELECT channel_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      GROUP BY channel_id
+    ),
+    sponsor_rollups AS (
+      SELECT
+        vs.channel_id,
+        COUNT(*) AS sponsor_scan_total,
+        SUM(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN 1 ELSE 0 END) AS sponsor_scan_sponsored,
+        MAX(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN vs.published_at ELSE NULL END) AS sponsor_scan_last_sponsored,
+        MAX(vs.scanned_at) AS sponsor_scan_scanned_at
+      FROM video_scans vs
+      INNER JOIN latest_scans ls
+        ON ls.channel_id = vs.channel_id
+        AND ls.scanned_at = vs.scanned_at
+      GROUP BY vs.channel_id
+    ),
+    latest_outreach AS (
+      SELECT channel_id, note AS latest_outreach_note
+      FROM outreach_log
+      WHERE id IN (
+        SELECT MAX(id)
+        FROM outreach_log
+        GROUP BY channel_id
+      )
+    )
+    SELECT
+      c.*,
+      s.title AS source_seed_title,
+      sr.sponsor_scan_total,
+      sr.sponsor_scan_sponsored,
+      sr.sponsor_scan_last_sponsored,
+      sr.sponsor_scan_scanned_at,
+      lo.latest_outreach_note
     FROM channels c
     LEFT JOIN channels s ON c.source_channel_id = s.channel_id
+    LEFT JOIN sponsor_rollups sr ON sr.channel_id = c.channel_id
+    LEFT JOIN latest_outreach lo ON lo.channel_id = c.channel_id
     WHERE ${clause}
     ORDER BY ${order}
     LIMIT 200`,
-  ).all<ChannelRow & { source_seed_title: string | null }>();
+  ).all<ChannelSummaryRow>();
 
   return results;
 }
@@ -647,17 +1106,48 @@ async function outreachLog(env: Env, channelId: string): Promise<unknown[]> {
 
 async function brands(env: Env): Promise<Response> {
   const { results } = await env.SCOUT_DB.prepare(
-    `SELECT c.*, s.title AS source_seed_title
+    `WITH latest_scans AS (
+      SELECT channel_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      GROUP BY channel_id
+    ),
+    sponsor_rollups AS (
+      SELECT
+        vs.channel_id,
+        COUNT(*) AS sponsor_scan_total,
+        SUM(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN 1 ELSE 0 END) AS sponsor_scan_sponsored,
+        MAX(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN vs.published_at ELSE NULL END) AS sponsor_scan_last_sponsored,
+        MAX(vs.scanned_at) AS sponsor_scan_scanned_at
+      FROM video_scans vs
+      INNER JOIN latest_scans ls
+        ON ls.channel_id = vs.channel_id
+        AND ls.scanned_at = vs.scanned_at
+      GROUP BY vs.channel_id
+    )
+    SELECT
+      c.*,
+      s.title AS source_seed_title,
+      sr.sponsor_scan_total,
+      sr.sponsor_scan_sponsored,
+      sr.sponsor_scan_last_sponsored,
+      sr.sponsor_scan_scanned_at
     FROM channels c
     LEFT JOIN channels s ON c.source_channel_id = s.channel_id
+    LEFT JOIN sponsor_rollups sr ON sr.channel_id = c.channel_id
     WHERE c.kind = 'brand'
       AND c.status IN ('candidate', 'shortlisted')
     ORDER BY c.subscriber_count IS NULL, c.subscriber_count DESC, c.title ASC`,
-  ).all<ChannelRow & { source_seed_title: string | null }>();
+  ).all<ChannelSummaryRow>();
 
   return json({
     brands: results.map((row) => {
       const raw = parseRaw(row.raw_json);
+      const sponsorFields = sponsorRollupFields({
+        sponsor_scan_total: Number(row.sponsor_scan_total ?? 0),
+        sponsor_scan_sponsored: Number(row.sponsor_scan_sponsored ?? 0),
+        sponsor_scan_last_sponsored: row.sponsor_scan_last_sponsored ?? null,
+        sponsor_scan_scanned_at: row.sponsor_scan_scanned_at ?? null,
+      });
       return {
         channel_id: row.channel_id,
         handle: row.handle,
@@ -666,6 +1156,7 @@ async function brands(env: Env): Promise<Response> {
         country: row.country,
         links: extractLinks(raw),
         source_seed_title: row.source_seed_title,
+        ...sponsorFields,
       };
     }),
   });
@@ -753,6 +1244,37 @@ async function searchSuggestions(env: Env): Promise<Response> {
   });
 }
 
+async function deepSearchVariants(request: Request, env: Env): Promise<Response> {
+  const body = await parseJson<{ query?: unknown }>(request);
+  const query = normalizeDeepQuery(typeof body.query === "string" ? body.query : "");
+  if (!query) return json({ error: "query is required" }, 400);
+
+  const fallback = fallbackDeepVariants(query);
+  try {
+    const result = await new AnthropicClient(env).generateDeepVariants({ baseQuery: query });
+    const variants = uniqueDeepVariants([...result.queries, ...fallback], query).slice(0, 4);
+    if (variants.length > 0) {
+      return json({
+        query,
+        variants,
+        source: result.queries.length >= 4 ? "llm" : "mixed",
+        input_tokens: result.inputTokens,
+        output_tokens: result.outputTokens,
+      });
+    }
+  } catch {
+    // Deep Search must remain available even if the LLM is unavailable or malformed.
+  }
+
+  return json({
+    query,
+    variants: fallback,
+    source: "fallback",
+    input_tokens: 0,
+    output_tokens: 0,
+  });
+}
+
 async function blockSearchSuggestion(request: Request, env: Env): Promise<Response> {
   const body = await parseJson<{ term?: unknown }>(request);
   const term = normalizeSuggestionBlockTerm(typeof body.term === "string" ? body.term : "");
@@ -777,6 +1299,36 @@ async function suggestionBlocklist(env: Env): Promise<Set<string>> {
 
 function normalizeSuggestionBlockTerm(value: string): string {
   return normalizeSuggestionTerm(value);
+}
+
+function normalizeDeepQuery(value: string): string {
+  return normalizeSuggestionTerm(value)
+    .replace(/[^a-z0-9 '&.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fallbackDeepVariants(query: string): string[] {
+  const base = normalizeDeepQuery(query);
+  return uniqueDeepVariants([
+    `${base} review`,
+    `${base} how to`,
+    `${base} vs`,
+    `${base} recipe`,
+  ], base);
+}
+
+function uniqueDeepVariants(values: string[], baseQuery: string): string[] {
+  const base = normalizeDeepQuery(baseQuery);
+  const seen = new Set<string>();
+  const variants: string[] = [];
+  for (const value of values) {
+    const term = normalizeDeepQuery(value);
+    if (!term || term === base || seen.has(term)) continue;
+    seen.add(term);
+    variants.push(term);
+  }
+  return variants;
 }
 
 async function mineQueries(request: Request, env: Env): Promise<Response> {
@@ -2146,6 +2698,15 @@ interface ChannelRow {
   updated_at: string;
 }
 
+interface ChannelSummaryRow extends ChannelRow {
+  source_seed_title: string | null;
+  sponsor_scan_total?: number | null;
+  sponsor_scan_sponsored?: number | null;
+  sponsor_scan_last_sponsored?: string | null;
+  sponsor_scan_scanned_at?: string | null;
+  latest_outreach_note?: string | null;
+}
+
 interface SnapshotTargetRow extends SnapshotTargetState {
   handle: string | null;
   title: string | null;
@@ -2165,6 +2726,25 @@ interface SnapshotRunSummary {
 }
 
 type SnapshotScope = "watchlist" | "seeds" | "channel";
+
+interface VideoScanRow {
+  id: number;
+  channel_id: string;
+  video_id: string;
+  video_title: string | null;
+  published_at: string | null;
+  scanned_at: string;
+  sponsorblock_has_sponsor: number | null;
+  sponsorblock_segments_json: string | null;
+  error: string | null;
+}
+
+interface ChannelSponsorRollup {
+  sponsor_scan_total: number;
+  sponsor_scan_sponsored: number;
+  sponsor_scan_last_sponsored: string | null;
+  sponsor_scan_scanned_at: string | null;
+}
 
 interface SnapshotRunOptions {
   scope: SnapshotScope;
@@ -2750,10 +3330,12 @@ function initialDistribution(): Record<ChannelKind, number> {
 }
 
 function channelSummary(
-  row: ChannelRow & { source_seed_title: string | null },
+  row: ChannelSummaryRow,
   growth?: GrowthMetrics,
 ): unknown {
   const raw = parseRaw(row.raw_json);
+  const sponsorTotal = Number(row.sponsor_scan_total ?? 0);
+  const sponsorSponsored = Number(row.sponsor_scan_sponsored ?? 0);
   return {
     channel_id: row.channel_id,
     title: row.title,
@@ -2771,6 +3353,7 @@ function channelSummary(
     contacted_at: row.contacted_at ?? null,
     last_touch_at: row.last_touch_at ?? null,
     next_followup_at: row.next_followup_at ?? null,
+    latest_outreach_note: row.latest_outreach_note ?? null,
     source_seed_title: row.source_seed_title,
     search_query: row.search_query,
     mention_count: row.mention_count,
@@ -2782,7 +3365,75 @@ function channelSummary(
     email_present: emailPresent(raw),
     social_links: socialLinks(raw),
     contact_links: contactLinks(raw),
+    sponsor_scan_total: sponsorTotal,
+    sponsor_scan_sponsored: sponsorSponsored,
+    sponsorship_rate: sponsorTotal > 0 ? Number((sponsorSponsored / sponsorTotal).toFixed(3)) : null,
+    last_sponsored_date: row.sponsor_scan_last_sponsored ?? null,
+    sponsor_scan_scanned_at: row.sponsor_scan_scanned_at ?? null,
+    sponsorshipRate: sponsorTotal > 0 ? Number((sponsorSponsored / sponsorTotal).toFixed(3)) : null,
+    lastSponsoredDate: row.sponsor_scan_last_sponsored ?? null,
     ...growthFields(growth),
+  };
+}
+
+async function sponsorRollupMapForChannels(
+  env: Env,
+  channelIds: string[],
+): Promise<Map<string, ChannelSponsorRollup>> {
+  const unique = [...new Set(channelIds)].filter(Boolean);
+  const rollups = new Map<string, ChannelSponsorRollup>();
+  if (unique.length === 0) return rollups;
+
+  const placeholders = unique.map(() => "?").join(", ");
+  const { results } = await env.SCOUT_DB.prepare(
+    `WITH latest_scans AS (
+      SELECT channel_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      WHERE channel_id IN (${placeholders})
+      GROUP BY channel_id
+    )
+    SELECT
+      vs.channel_id,
+      COUNT(*) AS sponsor_scan_total,
+      SUM(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN 1 ELSE 0 END) AS sponsor_scan_sponsored,
+      MAX(CASE WHEN vs.sponsorblock_has_sponsor = 1 THEN vs.published_at ELSE NULL END) AS sponsor_scan_last_sponsored,
+      MAX(vs.scanned_at) AS sponsor_scan_scanned_at
+    FROM video_scans vs
+    INNER JOIN latest_scans ls
+      ON ls.channel_id = vs.channel_id
+      AND ls.scanned_at = vs.scanned_at
+    GROUP BY vs.channel_id`,
+  )
+    .bind(...unique)
+    .all<ChannelSponsorRollup & { channel_id: string }>();
+
+  for (const row of results) {
+    rollups.set(row.channel_id, {
+      sponsor_scan_total: Number(row.sponsor_scan_total ?? 0),
+      sponsor_scan_sponsored: Number(row.sponsor_scan_sponsored ?? 0),
+      sponsor_scan_last_sponsored: row.sponsor_scan_last_sponsored ?? null,
+      sponsor_scan_scanned_at: row.sponsor_scan_scanned_at ?? null,
+    });
+  }
+
+  return rollups;
+}
+
+function sponsorRollupFields(rollup?: ChannelSponsorRollup): Record<string, unknown> {
+  const total = Number(rollup?.sponsor_scan_total ?? 0);
+  const sponsored = Number(rollup?.sponsor_scan_sponsored ?? 0);
+  const rate = total > 0 ? Number((sponsored / total).toFixed(3)) : null;
+  const lastDate = rollup?.sponsor_scan_last_sponsored ?? null;
+  const scannedAt = rollup?.sponsor_scan_scanned_at ?? null;
+
+  return {
+    sponsor_scan_total: total,
+    sponsor_scan_sponsored: sponsored,
+    sponsorship_rate: rate,
+    last_sponsored_date: lastDate,
+    sponsor_scan_scanned_at: scannedAt,
+    sponsorshipRate: rate,
+    lastSponsoredDate: lastDate,
   };
 }
 

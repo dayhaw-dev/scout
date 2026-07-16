@@ -26,12 +26,18 @@ export interface ChannelCardRow {
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
+  latest_outreach_note: string | null;
   source_seed_title: string | null;
   search_query: string | null;
   mention_count: number;
   email_present: boolean;
   social_links: string[];
   contact_links: ContactLink[];
+  sponsor_scan_total: number;
+  sponsor_scan_sponsored: number;
+  sponsorship_rate: number | null;
+  last_sponsored_date: string | null;
+  sponsor_scan_scanned_at: string | null;
   last_upload_at: string | null;
   uploads_last_90d: number | null;
   median_recent_views: number | null;
@@ -156,6 +162,11 @@ export interface BrandRow {
   country: string | null;
   links: string[];
   source_seed_title: string | null;
+  sponsor_scan_total: number;
+  sponsor_scan_sponsored: number;
+  sponsorship_rate: number | null;
+  last_sponsored_date: string | null;
+  sponsor_scan_scanned_at: string | null;
 }
 
 export interface StatusPayload {
@@ -228,6 +239,42 @@ export interface SnapshotSummary {
   truncated: number;
   credits_spent_this_run: number;
   note: string | null;
+}
+
+export interface SponsorScanRow {
+  id: number;
+  channel_id: string;
+  video_id: string;
+  video_title: string | null;
+  published_at: string | null;
+  scanned_at: string;
+  sponsorblock_has_sponsor: number | null;
+  sponsorblock_segments_json: string | null;
+  error: string | null;
+  verdict: "sponsored" | "unknown";
+  totalDurationSeconds: number;
+}
+
+export interface SponsorScanSummary {
+  channel_id: string;
+  cached: boolean;
+  id_source: "stored" | "rss" | "cache" | "deep_history";
+  video_count: number;
+  coverageLabel?: string;
+  totalScanned: number;
+  sponsoredCount: number;
+  sponsorshipRate: number;
+  lastSponsoredDate: string | null;
+  totalSponsorSeconds: number;
+  scans: SponsorScanRow[];
+}
+
+export interface DeepVariantsResponse {
+  query: string;
+  variants: string[];
+  source: "llm" | "mixed" | "fallback";
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export class ApiError extends Error {
@@ -316,6 +363,13 @@ export class ScoutApi {
     return this.request<{ suggestions: SearchSuggestion[]; content_suggestions: SearchSuggestion[] }>("/api/search/suggestions");
   }
 
+  deepVariants(queryText: string) {
+    return this.request<DeepVariantsResponse>("/api/search/deep-variants", {
+      method: "POST",
+      body: JSON.stringify({ query: queryText }),
+    });
+  }
+
   blockSearchSuggestion(term: string) {
     return this.request<{ blocked: string }>("/api/search/suggestions/blocklist", {
       method: "POST",
@@ -339,6 +393,20 @@ export class ScoutApi {
     return this.request<SnapshotSummary>("/api/admin/snapshot", {
       method: "POST",
       body: JSON.stringify(body),
+    });
+  }
+
+  sponsorScan(channelId: string) {
+    return this.request<SponsorScanSummary>(`/api/channels/${encodeURIComponent(channelId)}/sponsor-scan`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  sponsorScanDeepHistory(channelId: string) {
+    return this.request<SponsorScanSummary>(`/api/channels/${encodeURIComponent(channelId)}/sponsor-scan/deep-history`, {
+      method: "POST",
+      body: JSON.stringify({}),
     });
   }
 

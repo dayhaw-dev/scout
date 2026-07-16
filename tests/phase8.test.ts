@@ -167,7 +167,7 @@ test("phase 9 UI exposes snapshot growth states and mover thresholds", () => {
 test("phase 9 snapshot endpoint has cron config, cap, and local credit accounting", () => {
   const source = readFileSync("src/index.ts", "utf8");
   const wrangler = readFileSync("wrangler.jsonc", "utf8");
-  assert.match(wrangler, /"0 9 \* \* 1,4"/);
+  assert.match(wrangler, /"0 9 \* \* MON,THU"/);
   assert.match(source, /async scheduled/);
   assert.match(source, /scope: "watchlist"/);
   assert.match(source, /SNAPSHOT_CONFIG\.maxPerRun/);

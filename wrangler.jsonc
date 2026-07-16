@@ -8,7 +8,7 @@
 	},
 	"triggers": {
 		"crons": [
-			"0 9 * * 1,4"
+			"0 9 * * MON,THU"
 		]
 	},
 	"assets": {

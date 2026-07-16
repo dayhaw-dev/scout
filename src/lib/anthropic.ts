@@ -13,6 +13,10 @@ export interface SeedQueryPrompt {
   blockedTerms?: Set<string>;
 }
 
+export interface DeepVariantPrompt {
+  baseQuery: string;
+}
+
 export interface AnthropicQueryResult {
   queries: string[];
   inputTokens: number;
@@ -38,14 +42,53 @@ export class AnthropicClient {
       throw new AnthropicApiError(401, "ANTHROPIC_API_KEY is not configured.");
     }
 
+    return this.requestQueries({
+      system: seedSystemPrompt(prompt.blockedTerms ?? new Set()),
+      user: seedUserPrompt(prompt),
+      blockedTerms: prompt.blockedTerms ?? new Set(),
+      maxQueries: 6,
+    });
+  }
+
+  async generateDeepVariants(prompt: DeepVariantPrompt): Promise<AnthropicQueryResult> {
+    if (!this.env.ANTHROPIC_API_KEY) {
+      throw new AnthropicApiError(401, "ANTHROPIC_API_KEY is not configured.");
+    }
+
+    return this.requestQueries({
+      system: deepVariantSystemPrompt(),
+      user: JSON.stringify({ base_query: prompt.baseQuery }),
+      blockedTerms: new Set(),
+      maxQueries: 4,
+      rejectLazySuffixBase: prompt.baseQuery,
+    });
+  }
+
+  private async requestQueries({
+    system,
+    user,
+    blockedTerms,
+    maxQueries,
+    rejectLazySuffixBase,
+  }: {
+    system: string;
+    user: string;
+    blockedTerms: Set<string>;
+    maxQueries: number;
+    rejectLazySuffixBase?: string;
+  }): Promise<AnthropicQueryResult> {
+    if (!this.env.ANTHROPIC_API_KEY) {
+      throw new AnthropicApiError(401, "ANTHROPIC_API_KEY is not configured.");
+    }
+
     const payload = {
       model: MODEL,
       max_tokens: 400,
-      system: systemPrompt(prompt.blockedTerms ?? new Set()),
+      system,
       messages: [
         {
           role: "user",
-          content: userPrompt(prompt),
+          content: user,
         },
       ],
     };
@@ -74,7 +117,10 @@ export class AnthropicClient {
       const body = await response.json() as AnthropicResponse;
       const rawResponseText = extractText(body);
       return {
-        queries: parseAnthropicQueries(rawResponseText, prompt.blockedTerms ?? new Set()),
+        queries: parseAnthropicQueries(rawResponseText, blockedTerms, {
+          maxQueries,
+          rejectLazySuffixBase,
+        }),
         inputTokens: Number(body.usage?.input_tokens ?? 0),
         outputTokens: Number(body.usage?.output_tokens ?? 0),
         rawResponseText,
@@ -99,7 +145,15 @@ interface AnthropicResponse {
   };
 }
 
-export function parseAnthropicQueries(text: string, blockedTerms: Set<string> = new Set()): string[] {
+export function parseAnthropicQueries(
+  text: string,
+  blockedTerms: Set<string> = new Set(),
+  options: {
+    maxQueries?: number;
+    rejectLazySuffixBase?: string;
+  } = {},
+): string[] {
+  const maxQueries = options.maxQueries ?? 6;
   const normalized = stripCodeFence(text).trim();
   const start = normalized.indexOf("[");
   const end = normalized.lastIndexOf("]");
@@ -123,8 +177,9 @@ export function parseAnthropicQueries(text: string, blockedTerms: Set<string> = 
     if (words.length < 2 || words.length > 4) continue;
     if (term.length > 64) continue;
     if (blockedTerms.has(term)) continue;
+    if (options.rejectLazySuffixBase && isLazyDeepVariant(options.rejectLazySuffixBase, term)) continue;
     if (!queries.includes(term)) queries.push(term);
-    if (queries.length === 6) break;
+    if (queries.length === maxQueries) break;
   }
 
   if (queries.length === 0) {
@@ -132,6 +187,13 @@ export function parseAnthropicQueries(text: string, blockedTerms: Set<string> = 
   }
 
   return queries;
+}
+
+function isLazyDeepVariant(baseQuery: string, term: string): boolean {
+  const base = normalizeSuggestionTerm(baseQuery);
+  if (!base || !term.startsWith(`${base} `)) return false;
+  const suffix = term.slice(base.length).trim();
+  return suffix === "review" || suffix === "how to" || suffix === "vs";
 }
 
 function extractText(body: AnthropicResponse): string {
@@ -147,7 +209,7 @@ function stripCodeFence(text: string): string {
     .replace(/\s*```$/i, "");
 }
 
-function systemPrompt(blockedTerms: Set<string>): string {
+function seedSystemPrompt(blockedTerms: Set<string>): string {
   const blocked = [...blockedTerms].slice(0, 80);
   return [
     "You generate YouTube search queries for a talent scout hunting SIMILAR CREATORS to this channel.",
@@ -158,7 +220,19 @@ function systemPrompt(blockedTerms: Set<string>): string {
   ].filter(Boolean).join("\n");
 }
 
-function userPrompt(prompt: SeedQueryPrompt): string {
+function deepVariantSystemPrompt(): string {
+  return [
+    "You generate YouTube search query variants for a creator discovery operator.",
+    "Return exactly 4 queries that explore the SAME niche from different concrete angles.",
+    "Use adjacent dishes, techniques, ingredients, subtopics, proper nouns, or creator-audience language.",
+    "Each query must be 2-4 words, lowercase, and scout-usable.",
+    "NEVER return lazy suffix appends of the base query such as adding only \"review\", \"how to\", or \"vs\".",
+    "NEVER return clickbait fragments, channel-meta phrases, announcements, giveaways, merch, or generic single-word topics.",
+    "Respond ONLY with a JSON array of 4 strings.",
+  ].join("\n");
+}
+
+function seedUserPrompt(prompt: SeedQueryPrompt): string {
   return JSON.stringify({
     channel_title: prompt.title,
     channel_handle: prompt.handle,

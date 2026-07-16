@@ -29,6 +29,30 @@ test("parseAnthropicQueries rejects malformed responses", () => {
   assert.throws(() => parseAnthropicQueries("[\"one\"]"));
 });
 
+test("parseAnthropicQueries can reject lazy deep-search suffix variants", () => {
+  const queries = parseAnthropicQueries(
+    JSON.stringify([
+      "korean short ribs grilled review",
+      "galbi marinade recipe",
+      "la galbi charcoal",
+      "ssamjang grilled beef",
+      "korean bbq banchan",
+    ]),
+    new Set(),
+    {
+      maxQueries: 4,
+      rejectLazySuffixBase: "korean short ribs grilled",
+    },
+  );
+
+  assert.deepEqual(queries, [
+    "galbi marinade recipe",
+    "la galbi charcoal",
+    "ssamjang grilled beef",
+    "korean bbq banchan",
+  ]);
+});
+
 test("AnthropicClient logs zero-credit calls and retries one server error", async () => {
   const originalFetch = globalThis.fetch;
   const db = new MemoryD1();
@@ -79,6 +103,50 @@ test("AnthropicClient logs zero-credit calls and retries one server error", asyn
     assert.equal(result.outputTokens, 44);
     assert.equal(result.queries[0], "pagani huayra review");
     assert.match(result.rawResponseText, /pagani huayra review/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("AnthropicClient generates deep variants with token accounting", async () => {
+  const originalFetch = globalThis.fetch;
+  const db = new MemoryD1();
+  globalThis.fetch = (async () => Response.json({
+    content: [{
+      type: "text",
+      text: JSON.stringify([
+        "xi'an lamb paomo",
+        "uyghur lamb skewers",
+        "shaanxi flatbread soup",
+        "cumin lamb noodles",
+      ]),
+    }],
+    usage: {
+      input_tokens: 111,
+      output_tokens: 33,
+    },
+  })) as typeof fetch;
+
+  try {
+    const client = new AnthropicClient({
+      SCOUT_DB: db as unknown as D1Database,
+      ANTHROPIC_API_KEY: "test-key",
+      SCRAPECREATORS_API_KEY: "unused",
+      SCOUT_ADMIN_KEY: "admin",
+    } satisfies Env);
+    const result = await client.generateDeepVariants({
+      baseQuery: "chinese lamb flatbread soup",
+    });
+
+    assert.equal(db.logs.length, 1);
+    assert.equal(result.inputTokens, 111);
+    assert.equal(result.outputTokens, 33);
+    assert.deepEqual(result.queries, [
+      "xi'an lamb paomo",
+      "uyghur lamb skewers",
+      "shaanxi flatbread soup",
+      "cumin lamb noodles",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

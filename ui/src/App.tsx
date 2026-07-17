@@ -628,6 +628,19 @@ function StageView({
     }
   }
 
+  async function toggleEmailConfirmed(channel: ChannelCardRow) {
+    const nextConfirmed = !channel.email_confirmed;
+    try {
+      await api.patchChannel(channel.channel_id, { email_confirmed: nextConfirmed });
+      await load();
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"} business email ${nextConfirmed ? "confirmed" : "unmarked"}.`,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  }
 
   async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
     if (!outreachChannel) return;
@@ -1090,6 +1103,7 @@ function StageView({
               onSnooze={stage === "pool" || stage === "watchlist" || stage === "snoozed" ? (input) => saveSnooze(channel, input) : undefined}
               snoozedCount={status?.channel_counts.by_status.snoozed ?? 0}
               onToggleKind={stage !== "rejected" && stage !== "snoozed" ? () => void toggleKind(channel) : undefined}
+              onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
               onEnrich={stage !== "rejected" && stage !== "snoozed" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
               onSponsorScan={stage !== "rejected" && stage !== "snoozed" ? () => void scanSponsors(channel) : undefined}
@@ -1182,6 +1196,19 @@ function OutreachView({
     }
   }
 
+  async function toggleEmailConfirmed(channel: ChannelCardRow) {
+    const nextConfirmed = !channel.email_confirmed;
+    try {
+      await api.patchChannel(channel.channel_id, { email_confirmed: nextConfirmed });
+      await load();
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"} business email ${nextConfirmed ? "confirmed" : "unmarked"}.`,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  }
 
   async function enrichCard(channel: ChannelCardRow) {
     try {
@@ -1260,6 +1287,7 @@ function OutreachView({
               onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
               onBackToPool={channel.status !== "candidate" ? () => void patchStatus(channel, "candidate", `${channel.title ?? "Channel"} returned to Pool.`) : undefined}
               onToggleSeed={() => void toggleSeed(channel)}
+              onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
               onEnrich={() => void enrichCard(channel)}
               onSponsorScan={() => void scanSponsors(channel)}
               sponsorScan={sponsorScans[channel.channel_id]}
@@ -1282,6 +1310,7 @@ function OutreachView({
                 showStatus
                 onLogOutreach={() => setOutreachChannel(channel)}
                 onToggleSeed={channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
+                onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
                 onEnrich={() => void enrichCard(channel)}
                 onSponsorScan={() => void scanSponsors(channel)}
                 sponsorScan={sponsorScans[channel.channel_id]}
@@ -1854,6 +1883,7 @@ function ChannelCard({
   onSnooze,
   snoozedCount = 0,
   onToggleKind,
+  onToggleEmailConfirmed,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -1876,6 +1906,7 @@ function ChannelCard({
   onSnooze?: (input: SnoozeInput) => Promise<void>;
   snoozedCount?: number;
   onToggleKind?: () => void;
+  onToggleEmailConfirmed?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -1900,6 +1931,7 @@ function ChannelCard({
     onWake,
     onSnooze: onSnooze ? () => setSnoozeOpen((value) => !value) : undefined,
     onToggleKind,
+    onToggleEmailConfirmed,
     onEnrich,
     onLogOutreach,
     onSponsorScan,
@@ -1914,7 +1946,8 @@ function ChannelCard({
   const hasRecentViews = channel.median_recent_views !== null && channel.median_recent_views !== undefined;
   const provenanceItems = provenanceLine(channel, provenance);
   const footerDates = footerDateLine(channel);
-  const hasFooter = channel.contact_links.length > 0 || footerDates.length > 0;
+  const showConfirmedEmail = channel.email_confirmed && !channel.email_present;
+  const hasFooter = channel.contact_links.length > 0 || showConfirmedEmail || footerDates.length > 0;
   const sponsorStats = sponsorStatsForCard(channel, sponsorScan);
   const hasStats = hasMetricValue(channel.subscriber_count) || hasRecentViews || Boolean(sponsorStats);
 
@@ -1991,7 +2024,7 @@ function ChannelCard({
       <Sparkline points={channel.snapshots ?? []} />
       {hasFooter && (
         <div className="card-footer">
-          <IconLinks links={channel.contact_links} />
+          <IconLinks links={channel.contact_links} confirmedEmail={showConfirmedEmail} />
           {footerDates.length > 0 && (
             <div className="footer-dates">{footerDates.join(" / ")}</div>
           )}
@@ -2236,6 +2269,7 @@ function cardActions({
   onWake,
   onSnooze,
   onToggleKind,
+  onToggleEmailConfirmed,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -2253,6 +2287,7 @@ function cardActions({
   onWake?: () => void;
   onSnooze?: () => void;
   onToggleKind?: () => void;
+  onToggleEmailConfirmed?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -2307,6 +2342,16 @@ function cardActions({
       key: "kind",
       label: channel.kind === "brand" ? "Mark creator" : "Mark brand",
       onClick: onToggleKind,
+    });
+  }
+  if (onToggleEmailConfirmed && (!channel.email_present || channel.email_confirmed)) {
+    actions.push({
+      key: "email-confirmed",
+      label: channel.email_confirmed ? "Unmark business email" : "Mark business email exists",
+      onClick: onToggleEmailConfirmed,
+      title: channel.email_confirmed
+        ? "Remove the manual business-email confirmation"
+        : "Manually confirm that YouTube shows a business-email button",
     });
   }
   if (onEnrich) {
@@ -3412,8 +3457,14 @@ function Identity({ row }: { row: RawChannelRow }) {
   );
 }
 
-function IconLinks({ links }: { links: Array<{ type: string; label: string; url: string }> }) {
-  if (links.length === 0) return null;
+function IconLinks({
+  links,
+  confirmedEmail = false,
+}: {
+  links: Array<{ type: string; label: string; url: string }>;
+  confirmedEmail?: boolean;
+}) {
+  if (links.length === 0 && !confirmedEmail) return null;
   return (
     <div className="icon-row">
       {links.map((link, index) => (
@@ -3421,6 +3472,15 @@ function IconLinks({ links }: { links: Array<{ type: string; label: string; url:
           {iconText(link.type)}
         </a>
       ))}
+      {confirmedEmail && (
+        <span
+          className="contact-indicator manual-email"
+          title="EMAIL (CONFIRMED) - manual confirmation"
+          aria-label="Email confirmed manually"
+        >
+          {iconText("email")}
+        </span>
+      )}
     </div>
   );
 }

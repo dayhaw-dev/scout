@@ -36,6 +36,8 @@ export interface ChannelCardRow {
   search_query: string | null;
   mention_count: number;
   email_present: boolean;
+  email_confirmed: boolean;
+  email_confirmed_at: string | null;
   social_links: string[];
   contact_links: ContactLink[];
   sponsor_scan_total: number;
@@ -92,6 +94,8 @@ export interface RawChannelRow {
   woke_at?: string | null;
   kind: ChannelKind;
   kind_reason: string | null;
+  email_confirmed?: boolean;
+  email_confirmed_at?: string | null;
   yield_count?: number;
   last_upload_at?: string | null;
   uploads_last_90d?: number | null;
@@ -341,6 +345,7 @@ export class ScoutApi {
     status: ChannelStatus;
     kind: ChannelKind;
     is_seed: boolean;
+    email_confirmed: boolean;
     snoozed_until: string;
     snooze_reason: string;
   }>) {

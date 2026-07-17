@@ -465,12 +465,14 @@ async function patchChannel(
     kind?: unknown;
     status?: unknown;
     is_seed?: unknown;
+    email_confirmed?: unknown;
     snoozed_until?: unknown;
     snooze_reason?: unknown;
   }>(request);
   const updates: string[] = [];
   const bindings: unknown[] = [];
   let nextKind = existing.kind;
+  let nextEmailConfirmed = existing.email_confirmed === 1;
   let snoozeTransition;
 
   try {
@@ -523,12 +525,29 @@ async function patchChannel(
     bindings.push(body.is_seed ? 1 : 0);
   }
 
+  if (body.email_confirmed !== undefined) {
+    if (typeof body.email_confirmed !== "boolean") {
+      return json({ error: "email_confirmed must be boolean" }, 400);
+    }
+    nextEmailConfirmed = body.email_confirmed;
+    updates.push(
+      "email_confirmed = ?",
+      body.email_confirmed
+        ? "email_confirmed_at = CURRENT_TIMESTAMP"
+        : "email_confirmed_at = NULL",
+    );
+    bindings.push(body.email_confirmed ? 1 : 0);
+  }
 
   if (updates.length === 0) {
     return json({ error: "Nothing to update" }, 400);
   }
 
-  const scoring = scoreFromRow({ ...existing, kind: nextKind });
+  const scoring = scoreFromRow({
+    ...existing,
+    kind: nextKind,
+    email_confirmed: nextEmailConfirmed ? 1 : 0,
+  });
   updates.push("score = ?", "score_breakdown = ?", "updated_at = CURRENT_TIMESTAMP");
   bindings.push(
     scoring.score,
@@ -2730,6 +2749,8 @@ interface ChannelRow {
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
+  email_confirmed: number;
+  email_confirmed_at: string | null;
   snoozed_until: string | null;
   snooze_reason: string | null;
   snoozed_at: string | null;
@@ -3372,6 +3393,7 @@ function scoreFromRow(row: ChannelRow): ScoreResult {
     median_recent_views: row.median_recent_views,
     enriched_at: row.enriched_at,
     recent_velocity: row.recent_velocity,
+    email_confirmed: row.email_confirmed,
   });
 }
 
@@ -3422,6 +3444,8 @@ function channelSummary(
     enriched_at: row.enriched_at,
     recent_velocity: row.recent_velocity,
     email_present: emailPresent(raw),
+    email_confirmed: row.email_confirmed === 1,
+    email_confirmed_at: row.email_confirmed_at ?? null,
     social_links: socialLinks(raw),
     contact_links: contactLinks(raw),
     sponsor_scan_total: sponsorTotal,

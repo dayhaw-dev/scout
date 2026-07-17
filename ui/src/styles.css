@@ -1137,7 +1137,8 @@ a:hover {
   font-size: 12px;
 }
 
-.icon-row a {
+.icon-row a,
+.icon-row .contact-indicator {
   display: inline-grid;
   place-items: center;
   min-width: 34px;
@@ -1149,6 +1150,9 @@ a:hover {
   clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
 }
 
+.icon-row .manual-email {
+  cursor: help;
+}
 
 .brand-link-row {
   display: flex;

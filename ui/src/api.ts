@@ -118,6 +118,20 @@ export interface RawChannelRow {
   mining_freshness?: SeedMiningFreshness | null;
 }
 
+export type RosterAddResponse =
+  | {
+    outcome: "confirmation_required";
+    input: string;
+    expected_credits: number;
+    max_credits: number;
+    message: string;
+  }
+  | {
+    outcome: "created" | "activated_existing" | "already_active";
+    credits_spent: number;
+    channel: RawChannelRow;
+  };
+
 export interface SeedMiningFreshness {
   latest_upload_at: string | null;
   newest_stored_video_at: string | null;
@@ -360,6 +374,20 @@ export class ScoutApi {
     return this.request<{ working: ChannelCardRow[]; live: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
   }
 
+  addToRoster(input: string, confirmSpend = false) {
+    return this.request<RosterAddResponse>("/api/outreach/roster", {
+      method: "POST",
+      body: JSON.stringify({ input, confirm_spend: confirmSpend }),
+    });
+  }
+
+  setChannelActive(channelId: string, isActive: boolean) {
+    return this.request<RawChannelRow>(`/api/channels/${encodeURIComponent(channelId)}/active`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    });
+  }
+
   listChannels(status: ChannelStatus | "seed") {
     return this.request<{ channels: RawChannelRow[] }>(`/api/channels?status=${status}`);
   }
@@ -392,7 +420,6 @@ export class ScoutApi {
     status: ChannelStatus;
     kind: ChannelKind;
     is_seed: boolean;
-    is_active: boolean;
     email_confirmed: boolean;
     snoozed_until: string;
     snooze_reason: string;

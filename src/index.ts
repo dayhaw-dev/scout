@@ -78,6 +78,11 @@ import {
   outreachSqlList,
   OutreachStatus,
 } from "./lib/outreach";
+import {
+  normalizeRosterInput,
+  RosterInputError,
+  RosterLookup,
+} from "./lib/roster";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
@@ -126,6 +131,7 @@ export default {
       const expandMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/expand$/);
       const seedFreshnessMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/freshness$/);
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
+      const activeChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/active$/);
       const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
       const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
       const sponsorScanDeepMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan\/deep-history$/);
@@ -258,6 +264,22 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return outreach(env);
+      }
+
+      if (url.pathname === "/api/outreach/roster" && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await addToRoster(request, env);
+      }
+
+      if (activeChannelMatch && request.method === "PATCH") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await setChannelActive(
+          decodeURIComponent(activeChannelMatch[1]),
+          request,
+          env,
+        );
       }
 
       if (outreachChannelMatch && request.method === "POST") {
@@ -426,10 +448,14 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
     return json({ error: "Invalid status" }, 400);
   }
 
+  const stageClause = shortlistStageClause(requestedStatus as ChannelStatus, null);
   const { results } = await env.SCOUT_DB.prepare(
-    "SELECT * FROM channels WHERE status = ? ORDER BY created_at DESC LIMIT 100",
+    `SELECT * FROM channels c
+    WHERE ${stageClause.sql}
+    ORDER BY c.created_at DESC
+    LIMIT 100`,
   )
-    .bind(requestedStatus)
+    .bind(...stageClause.bindings)
     .all<ChannelRow>();
   const growth = await growthMapForChannels(env, results.map((row) => row.channel_id));
   const sponsorRollups = await sponsorRollupMapForChannels(env, results.map((row) => row.channel_id));
@@ -750,6 +776,12 @@ async function patchChannel(
     snoozed_until?: unknown;
     snooze_reason?: unknown;
   }>(request);
+  if (body.is_active !== undefined) {
+    return json(
+      { error: "Active status can only be changed through the Outreach roster controls." },
+      400,
+    );
+  }
   const updates: string[] = [];
   const bindings: unknown[] = [];
   let nextKind = existing.kind;
@@ -804,14 +836,6 @@ async function patchChannel(
     }
     updates.push("is_seed = ?");
     bindings.push(body.is_seed ? 1 : 0);
-  }
-
-  if (body.is_active !== undefined) {
-    if (typeof body.is_active !== "boolean") {
-      return json({ error: "is_active must be boolean" }, 400);
-    }
-    updates.push("is_active = ?");
-    bindings.push(body.is_active ? 1 : 0);
   }
 
   if (body.email_confirmed !== undefined) {
@@ -1414,6 +1438,177 @@ async function outreach(env: Env): Promise<Response> {
     working: working.map((row) => channelSummary(row, growth.get(row.channel_id))),
     live: live.map((row) => channelSummary(row, growth.get(row.channel_id))),
     closed: closed.map((row) => channelSummary(row, growth.get(row.channel_id))),
+  });
+}
+
+async function addToRoster(request: Request, env: Env): Promise<Response> {
+  const body = await parseJson<{ input?: unknown; confirm_spend?: unknown }>(request);
+  if (typeof body.input !== "string") {
+    return json({ error: "Paste a YouTube channel URL or @handle." }, 400);
+  }
+  if (body.confirm_spend !== undefined && typeof body.confirm_spend !== "boolean") {
+    return json({ error: "confirm_spend must be boolean" }, 400);
+  }
+
+  let lookup: RosterLookup;
+  try {
+    lookup = normalizeRosterInput(body.input);
+  } catch (error) {
+    if (error instanceof RosterInputError) {
+      return json({ error: error.message }, 400);
+    }
+    throw error;
+  }
+
+  const existing = await findRosterChannel(env, lookup);
+  if (existing) {
+    return activateRosterChannel(env, existing.channel_id, 0);
+  }
+
+  if (body.confirm_spend !== true) {
+    return json({
+      outcome: "confirmation_required",
+      input: lookup.resolveInput,
+      expected_credits: 1,
+      max_credits: 2,
+      message: "This channel is not in SCOUT. Confirm before using ScrapeCreators channel lookup.",
+    });
+  }
+
+  let creditsSpent = 0;
+  const client = new ScrapeCreatorsClient(env, {
+    onApiLog: () => {
+      creditsSpent += 1;
+    },
+  });
+  let resolved: ScrapeCreatorsChannel;
+  try {
+    resolved = await client.getChannel(lookup.resolveInput);
+  } catch (error) {
+    if (error instanceof ScrapeCreatorsApiError) {
+      const message = error.status === 400 || error.status === 404
+        ? "YouTube channel could not be resolved. Check the URL or @handle."
+        : error.message;
+      return json(
+        {
+          error: error.kind,
+          message: `${message} ${creditsSpent} ScrapeCreators credit${creditsSpent === 1 ? "" : "s"} spent; nothing was added.`,
+          credits_spent: creditsSpent,
+        },
+        error.status === 400 || error.status === 404 ? 422 : error.status,
+      );
+    }
+    throw error;
+  }
+
+  if (!resolved.channelId) {
+    return json(
+      {
+        error: "ScrapeCreators returned no channel ID; nothing was added.",
+        message: `ScrapeCreators returned no channel ID. ${creditsSpent} credit${creditsSpent === 1 ? "" : "s"} spent; nothing was added.`,
+        credits_spent: creditsSpent,
+      },
+      502,
+    );
+  }
+
+  const resolvedExisting = await env.SCOUT_DB.prepare(
+    "SELECT * FROM channels WHERE channel_id = ?",
+  )
+    .bind(resolved.channelId)
+    .first<ChannelRow>();
+  if (resolvedExisting) {
+    return activateRosterChannel(env, resolvedExisting.channel_id, creditsSpent);
+  }
+
+  await upsertChannel(env, resolved, {
+    discoveredVia: "manual",
+    status: "candidate",
+    sourceChannelId: null,
+    mentionCount: 0,
+    isSeed: false,
+    isActive: true,
+  });
+
+  return json({
+    outcome: "created",
+    credits_spent: creditsSpent,
+    channel: await getChannel(env, resolved.channelId),
+  }, 201);
+}
+
+async function setChannelActive(
+  channelId: string,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const body = await parseJson<{ is_active?: unknown }>(request);
+  if (typeof body.is_active !== "boolean") {
+    return json({ error: "is_active must be boolean" }, 400);
+  }
+
+  const existing = await requireMutableChannel(env, channelId);
+  if (
+    body.is_active
+    && existing.is_active !== 1
+    && existing.outreach_stage === "none"
+  ) {
+    return json(
+      { error: "Use Add to roster for channels that do not have an outreach status." },
+      409,
+    );
+  }
+  if ((existing.is_active === 1) !== body.is_active) {
+    await env.SCOUT_DB.prepare(
+      "UPDATE channels SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE channel_id = ?",
+    )
+      .bind(body.is_active ? 1 : 0, channelId)
+      .run();
+  }
+
+  return json(await getChannel(env, channelId));
+}
+
+async function findRosterChannel(
+  env: Env,
+  lookup: RosterLookup,
+): Promise<ChannelRow | null> {
+  if (lookup.kind === "channel_id") {
+    return env.SCOUT_DB.prepare("SELECT * FROM channels WHERE channel_id = ?")
+      .bind(lookup.value)
+      .first<ChannelRow>();
+  }
+  if (lookup.kind === "handle") {
+    return env.SCOUT_DB.prepare(
+      `SELECT * FROM channels
+      WHERE LOWER(CASE WHEN SUBSTR(handle, 1, 1) = '@' THEN SUBSTR(handle, 2) ELSE handle END) = ?
+      LIMIT 1`,
+    )
+      .bind(lookup.value)
+      .first<ChannelRow>();
+  }
+  return null;
+}
+
+async function activateRosterChannel(
+  env: Env,
+  channelId: string,
+  creditsSpent: number,
+): Promise<Response> {
+  const existing = await requireMutableChannel(env, channelId);
+  const outcome = existing.is_active === 1 ? "already_active" : "activated_existing";
+  if (existing.is_active !== 1) {
+    await env.SCOUT_DB.prepare(
+      "UPDATE channels SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE channel_id = ?",
+    )
+      .bind(channelId)
+      .run();
+  }
+
+  return json({
+    outcome,
+    credits_spent: creditsSpent,
+    channel: await getChannel(env, channelId),
   });
 }
 
@@ -3584,6 +3779,7 @@ async function upsertChannel(
     mentionCount: number;
     searchQuery?: string | null;
     isSeed?: boolean;
+    isActive?: boolean;
     kindReason?: string | null;
   },
 ): Promise<void> {
@@ -3637,6 +3833,7 @@ async function upsertChannel(
       published_at,
       thumbnail_url,
       is_seed,
+      is_active,
       discovered_via,
       source_channel_id,
       status,
@@ -3647,7 +3844,7 @@ async function upsertChannel(
       score,
       score_breakdown,
       raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(channel_id) DO UPDATE SET
       handle = excluded.handle,
       title = excluded.title,
@@ -3659,6 +3856,7 @@ async function upsertChannel(
       published_at = excluded.published_at,
       thumbnail_url = excluded.thumbnail_url,
       is_seed = CASE WHEN excluded.is_seed = 1 THEN 1 ELSE channels.is_seed END,
+      is_active = CASE WHEN excluded.is_active = 1 THEN 1 ELSE channels.is_active END,
       discovered_via = excluded.discovered_via,
       source_channel_id = COALESCE(excluded.source_channel_id, channels.source_channel_id),
       status = CASE WHEN excluded.is_seed = 1 THEN channels.status ELSE excluded.status END,
@@ -3683,6 +3881,7 @@ async function upsertChannel(
       publishedAt,
       thumbnailUrl,
       options.isSeed ? 1 : 0,
+      options.isActive ? 1 : 0,
       options.discoveredVia,
       options.sourceChannelId,
       options.status,

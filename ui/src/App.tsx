@@ -646,20 +646,6 @@ function StageView({
     }
   }
 
-  async function toggleActive(channel: ChannelCardRow) {
-    const nextActive = !channel.is_active;
-    try {
-      await api.patchChannel(channel.channel_id, { is_active: nextActive });
-      await load();
-      onChanged();
-      onToast({
-        message: `${channel.title ?? "Channel"} ${nextActive ? "marked ACTIVE / WORKING WITH" : "removed from ACTIVE"}.`,
-      });
-    } catch (error) {
-      onError(error);
-    }
-  }
-
   async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
     if (!outreachChannel) return;
     const channel = outreachChannel;
@@ -1122,7 +1108,6 @@ function StageView({
               snoozedCount={status?.channel_counts.by_status.snoozed ?? 0}
               onToggleKind={stage !== "rejected" && stage !== "snoozed" ? () => void toggleKind(channel) : undefined}
               onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
-              onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
               onEnrich={stage !== "rejected" && stage !== "snoozed" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
               onSponsorScan={stage !== "rejected" && stage !== "snoozed" ? () => void scanSponsors(channel) : undefined}
@@ -1175,6 +1160,14 @@ function OutreachView({
   const [sponsorScans, setSponsorScans] = useState<SponsorScanState>({});
   const [sponsorScanTarget, setSponsorScanTarget] = useState<SponsorScanTarget | null>(null);
   const [scanningSponsorId, setScanningSponsorId] = useState<string | null>(null);
+  const [rosterInput, setRosterInput] = useState("");
+  const [rosterConfirmation, setRosterConfirmation] = useState<{
+    input: string;
+    expectedCredits: number;
+    maxCredits: number;
+  } | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [rosterBusy, setRosterBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1223,7 +1216,7 @@ function OutreachView({
   async function toggleActive(channel: ChannelCardRow) {
     const nextActive = !channel.is_active;
     try {
-      await api.patchChannel(channel.channel_id, { is_active: nextActive });
+      await api.setChannelActive(channel.channel_id, nextActive);
       await load();
       onChanged();
       onToast({
@@ -1232,6 +1225,68 @@ function OutreachView({
     } catch (error) {
       onError(error);
     }
+  }
+
+  async function submitRoster(event: FormEvent) {
+    event.preventDefault();
+    if (!rosterInput.trim() || rosterBusy) return;
+    setRosterBusy(true);
+    setRosterError(null);
+    setRosterConfirmation(null);
+    try {
+      const result = await api.addToRoster(rosterInput.trim());
+      if (result.outcome === "confirmation_required") {
+        setRosterConfirmation({
+          input: result.input,
+          expectedCredits: result.expected_credits,
+          maxCredits: result.max_credits,
+        });
+        return;
+      }
+      await finishRosterAdd(result);
+    } catch (error) {
+      setRosterError(errorMessage(error));
+    } finally {
+      setRosterBusy(false);
+    }
+  }
+
+  async function confirmRosterSpend() {
+    if (!rosterConfirmation || rosterBusy) return;
+    setRosterBusy(true);
+    setRosterError(null);
+    try {
+      const result = await api.addToRoster(rosterConfirmation.input, true);
+      if (result.outcome === "confirmation_required") {
+        setRosterError("Confirmation was not accepted; no lookup was performed.");
+        return;
+      }
+      await finishRosterAdd(result);
+    } catch (error) {
+      setRosterError(errorMessage(error));
+    } finally {
+      setRosterBusy(false);
+    }
+  }
+
+  async function finishRosterAdd(result: {
+    outcome: "created" | "activated_existing" | "already_active";
+    credits_spent: number;
+    channel: RawChannelRow;
+  }) {
+    setRosterInput("");
+    setRosterConfirmation(null);
+    await load();
+    onChanged();
+    const label = result.channel.title ?? result.channel.handle ?? result.channel.channel_id;
+    const action = result.outcome === "created"
+      ? "created in SCOUT and added to ACTIVE"
+      : result.outcome === "activated_existing"
+        ? "found in SCOUT and marked ACTIVE"
+        : "was already ACTIVE";
+    onToast({
+      message: `${label} ${action}. ${result.credits_spent} ScrapeCreators credit${result.credits_spent === 1 ? "" : "s"} spent.`,
+    });
   }
 
   async function enrichCard(channel: ChannelCardRow) {
@@ -1296,8 +1351,45 @@ function OutreachView({
         <strong>Active / working with</strong>
         <span>Current brand relationships, independent of outreach funnel status.</span>
       </div>
+      <form className="roster-add clipped" onSubmit={(event) => void submitRoster(event)}>
+        <div className="roster-add-copy">
+          <strong>Add to roster</strong>
+          <span>Existing SCOUT channels cost 0 credits. New channels require a confirmed lookup.</span>
+        </div>
+        <div className="roster-add-controls">
+          <input
+            value={rosterInput}
+            onChange={(event) => {
+              setRosterInput(event.target.value);
+              setRosterConfirmation(null);
+              setRosterError(null);
+            }}
+            placeholder="YouTube channel URL or @handle"
+            aria-label="YouTube channel URL or handle"
+            disabled={rosterBusy}
+          />
+          <button type="submit" disabled={rosterBusy || !rosterInput.trim()}>
+            {rosterBusy ? "Checking..." : "Add to roster"}
+          </button>
+        </div>
+        {rosterConfirmation && (
+          <div className="roster-confirmation">
+            <span>
+              Not found in SCOUT. Expected cost: {rosterConfirmation.expectedCredits} credit
+              {rosterConfirmation.expectedCredits === 1 ? "" : "s"}
+              {rosterConfirmation.maxCredits > rosterConfirmation.expectedCredits
+                ? `; max ${rosterConfirmation.maxCredits} if the lookup retries.`
+                : "."}
+            </span>
+            <button type="button" onClick={() => void confirmRosterSpend()} disabled={rosterBusy}>
+              Confirm spend & add
+            </button>
+          </div>
+        )}
+        {rosterError && <div className="roster-error" role="alert">{rosterError}</div>}
+      </form>
       {loading ? <Loading /> : working.length === 0 ? (
-        <EmptyState title="No active relationships" detail="Mark a creator ACTIVE from any prospect or outreach card." />
+        <EmptyState title="No active relationships" detail="Add a channel above or mark it ACTIVE from an Outreach card." />
       ) : (
         <div className="card-grid">
           {working.map((channel) => (
@@ -1505,22 +1597,6 @@ function SeedsView({
     }
   }
 
-  async function toggleSeedActive(seed: RawChannelRow) {
-    const nextActive = !seed.is_active;
-    try {
-      await api.patchChannel(seed.channel_id, { is_active: nextActive });
-      setSeeds((rows) => rows.map((row) => (
-        row.channel_id === seed.channel_id ? { ...row, is_active: nextActive } : row
-      )));
-      onChanged();
-      onToast({
-        message: `${seed.title ?? "Seed"} ${nextActive ? "marked ACTIVE / WORKING WITH" : "removed from ACTIVE"}.`,
-      });
-    } catch (error) {
-      onError(error);
-    }
-  }
-
   async function expandAll() {
     if (bulk.active) return;
     if (unlockedSeeds.length === 0) return;
@@ -1723,7 +1799,6 @@ function SeedsView({
               onExpand={() => setDialogSeed(seed)}
               onSnapshot={() => void snapshotSeed(seed)}
               onUnseed={() => void unseed(seed)}
-              onToggleActive={() => void toggleSeedActive(seed)}
               onQuery={onQuery}
               onDismissQuery={(term) => void dismissSeedQuery(term)}
               searchedTerms={searchedTerms}
@@ -2546,7 +2621,7 @@ function cardActions({
         : "Manually confirm that YouTube shows a business-email button",
     });
   }
-  if (onToggleActive) {
+  if (onToggleActive && tab === "outreach") {
     actions.push({
       key: "active-relationship",
       label: channel.is_active ? "Stop working with" : "Mark ACTIVE / working with",
@@ -2933,7 +3008,6 @@ function SeedCard({
   onExpand,
   onSnapshot,
   onUnseed,
-  onToggleActive,
   onQuery,
   onDismissQuery,
   searchedTerms,
@@ -2942,7 +3016,6 @@ function SeedCard({
   onExpand: () => void;
   onSnapshot: () => void;
   onUnseed: () => void;
-  onToggleActive: () => void;
   onQuery: (query: string) => void;
   onDismissQuery: (query: string) => void;
   searchedTerms: Set<string>;
@@ -3016,9 +3089,6 @@ function SeedCard({
       <div className="card-actions">
         <button onClick={onExpand} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be expanded" : undefined}>Expand</button>
         <button onClick={onSnapshot}>Snapshot</button>
-        <button onClick={onToggleActive} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be modified" : undefined}>
-          {seed.is_active ? "Stop working with" : "Mark ACTIVE"}
-        </button>
         <button onClick={onUnseed} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be unseeded" : undefined}>Unseed</button>
       </div>
     </article>

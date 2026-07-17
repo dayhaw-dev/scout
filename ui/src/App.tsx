@@ -14,6 +14,7 @@ import {
   OutreachStatus,
   RawChannelRow,
   ScoutApi,
+  SeedMiningFreshness,
   SearchRecord,
   SearchSuggestion,
   SearchSummary,
@@ -26,6 +27,7 @@ import { HOT_CONFIG, MOVER_CONFIG, REACH_CONFIG } from "./config";
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
 type SortMode = "score" | "growth" | "wake" | "subs_desc" | "subs_asc";
+type SeedSortMode = "unmined" | "yield" | "latest_upload";
 type GateState = "idle" | "checking" | "denied" | "success" | "cooldown";
 type ToastState = {
   message: string;
@@ -1365,23 +1367,55 @@ function SeedsView({
   const [summary, setSummary] = useState<SearchSummary | null>(null);
   const [batchSummary, setBatchSummary] = useState<ExpandAllSeedsSummary | null>(null);
   const [searches, setSearches] = useState<SearchRecord[]>([]);
+  const [seedSort, setSeedSort] = useState<SeedSortMode>("unmined");
+  const freshnessRunRef = useRef(0);
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
   const unlockedSeeds = useMemo(() => seeds.filter((seed) => !seed.seed_locked), [seeds]);
+  const sortedSeeds = useMemo(() => sortSeeds(seeds, seedSort), [seeds, seedSort]);
+
+  const applyFreshness = useCallback((channelId: string, freshness: SeedMiningFreshness) => {
+    setSeeds((rows) => rows.map((seed) => (
+      seed.channel_id === channelId
+        ? { ...seed, mining_freshness: freshness }
+        : seed
+    )));
+  }, []);
+
+  const refreshStaleFreshness = useCallback(async (rows: RawChannelRow[]) => {
+    const runId = freshnessRunRef.current + 1;
+    freshnessRunRef.current = runId;
+    const staleSeeds = rows.filter((seed) => !seed.mining_freshness || seed.mining_freshness.stale);
+
+    for (const seed of staleSeeds) {
+      if (freshnessRunRef.current !== runId) return;
+      try {
+        applyFreshness(seed.channel_id, await api.refreshSeedFreshness(seed.channel_id));
+      } catch {
+        // Automatic checks fail quietly per seed; the manual check reports failures.
+      }
+      await pause(300);
+    }
+  }, [api, applyFreshness]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setSeeds((await api.listChannels("seed")).channels);
+      const loadedSeeds = (await api.listChannels("seed")).channels;
+      setSeeds(loadedSeeds);
       setSearches((await api.listSearches()).searches);
+      void refreshStaleFreshness(loadedSeeds);
     } catch (error) {
       onError(error);
     } finally {
       setLoading(false);
     }
-  }, [api, onError]);
+  }, [api, onError, refreshStaleFreshness]);
 
   useEffect(() => {
     void load();
+    return () => {
+      freshnessRunRef.current += 1;
+    };
   }, [load]);
 
   async function addSeed(event: FormEvent) {
@@ -1491,6 +1525,40 @@ function SeedsView({
     }
   }
 
+  async function checkFreshness() {
+    if (bulk.active || seeds.length === 0) return;
+    freshnessRunRef.current += 1;
+    const controller = bulk.start();
+    try {
+      const result = await runBulkOperation({
+        action: "Checking seed freshness",
+        items: seeds.map((seed) => ({
+          id: seed.channel_id,
+          label: seed.title ?? seed.handle ?? seed.channel_id,
+          value: seed,
+        })),
+        controller,
+        runItem: async (seed: RawChannelRow) => {
+          const freshness = await api.refreshSeedFreshness(seed.channel_id, true);
+          applyFreshness(seed.channel_id, freshness);
+          await pause(300);
+          if (freshness.status === "error") {
+            throw new Error(freshness.error ?? "YouTube RSS freshness check failed.");
+          }
+          return freshness;
+        },
+        getCredits: () => 0,
+        getErrorMessage: errorMessage,
+        onProgress: bulk.update,
+      });
+      onToast({ message: bulkResultToast("Checked freshness for", result, "seed") });
+    } catch (error) {
+      onError(error);
+    } finally {
+      bulk.finish();
+    }
+  }
+
   async function snapshotSeed(seed: RawChannelRow) {
     try {
       const result = await api.snapshotNow({ scope: "channel", channel_id: seed.channel_id });
@@ -1547,6 +1615,22 @@ function SeedsView({
         >
           Regen Queries max 0 credits
         </button>
+        <button
+          type="button"
+          onClick={() => void checkFreshness()}
+          disabled={bulk.active || seeds.length === 0}
+          title="Refreshes public YouTube RSS only. Costs zero ScrapeCreators credits."
+        >
+          Check freshness
+        </button>
+        <label className="seed-sort-control">
+          <span>SORT</span>
+          <select value={seedSort} onChange={(event) => setSeedSort(event.target.value as SeedSortMode)}>
+            <option value="unmined">Unmined desc</option>
+            <option value="latest_upload">Latest upload</option>
+            <option value="yield">Yield desc</option>
+          </select>
+        </label>
       </form>
       {summary && <RunSummary summary={summary} />}
       {batchSummary && <ExpandAllSummary summary={batchSummary} />}
@@ -1554,7 +1638,7 @@ function SeedsView({
         <EmptyState title="No seeds yet" detail="Add a handle or promote a shortlist card into seed coverage." />
       ) : (
         <div className="card-grid seed-grid">
-          {seeds.map((seed) => (
+          {sortedSeeds.map((seed) => (
             <SeedCard
               key={seed.channel_id}
               seed={seed}
@@ -2788,11 +2872,13 @@ function SeedCard({
         <span className="chip">seed</span>
         <span className="chip">YIELD: {seed.yield_count ?? 0}</span>
         {seed.seed_locked && <span className="chip locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
+        <SeedFreshnessChip freshness={seed.mining_freshness ?? null} />
       </div>
       <GrowthChips row={seed} />
       <Sparkline points={seed.snapshots ?? []} />
       <div className="meta-line">
         <span>added {shortDate(seed.created_at)}</span>
+        <SeedFreshnessRecency freshness={seed.mining_freshness ?? null} />
       </div>
       {phrases.length > 0 && (
         <div className="seed-queries">
@@ -2835,6 +2921,49 @@ function SeedCard({
       </div>
     </article>
   );
+}
+
+function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | null }) {
+  if (!freshness) {
+    return <span className="chip freshness-chip freshness-pending">CHECKING</span>;
+  }
+  if (freshness.never_mined) {
+    return (
+      <span
+        className="chip freshness-chip freshness-never"
+        title={freshness.status === "error" ? freshness.error ?? undefined : "This seed has no stored videos."}
+      >
+        NEVER MINED
+      </span>
+    );
+  }
+  if (freshness.status === "error") {
+    return <span className="chip freshness-chip freshness-error" title={freshness.error ?? undefined}>RSS ERROR</span>;
+  }
+  if (freshness.status === "empty") {
+    return <span className="chip freshness-chip freshness-pending">NO RSS ENTRIES</span>;
+  }
+  if ((freshness.unmined_count ?? 0) > 0) {
+    return (
+      <span
+        className="chip freshness-chip freshness-unmined"
+        title={`Checked ${relativeTime(freshness.checked_at)} from ${freshness.rss_entry_count} RSS entries.`}
+      >
+        {freshness.unmined_count}{freshness.unmined_is_lower_bound ? "+" : ""} UNMINED
+      </span>
+    );
+  }
+  return <span className="chip freshness-chip freshness-mined">MINED</span>;
+}
+
+function SeedFreshnessRecency({ freshness }: { freshness: SeedMiningFreshness | null }) {
+  if (!freshness) return <span>freshness pending</span>;
+  if (freshness.latest_upload_at) {
+    return <span>last upload {relativeTime(freshness.latest_upload_at)}</span>;
+  }
+  if (freshness.status === "empty") return <span>no RSS entries</span>;
+  if (freshness.status === "error") return <span>RSS check failed</span>;
+  return <span>last upload unknown</span>;
 }
 
 type GrowthRow = Pick<
@@ -3684,6 +3813,10 @@ function errorMessage(error: unknown): string {
   return value || "Request failed with no error message.";
 }
 
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseKindParam(value: string | null): ChannelKind[] {
   if (!value) return ["creator"];
   const kinds = value
@@ -3765,6 +3898,41 @@ function sortChannels(channels: ChannelCardRow[], sort: SortMode): ChannelCardRo
     }
     return (b.score ?? 0) - (a.score ?? 0);
   });
+}
+
+function sortSeeds(seeds: RawChannelRow[], sort: SeedSortMode): RawChannelRow[] {
+  return [...seeds].sort((a, b) => {
+    if (sort === "yield") {
+      const yieldDifference = (b.yield_count ?? 0) - (a.yield_count ?? 0);
+      if (yieldDifference !== 0) return yieldDifference;
+    }
+    if (sort === "latest_upload") {
+      const latestDifference = freshnessUploadTime(b) - freshnessUploadTime(a);
+      if (latestDifference !== 0) return latestDifference;
+    }
+    if (sort === "unmined") {
+      const unminedDifference = freshnessSortValue(b) - freshnessSortValue(a);
+      if (unminedDifference !== 0) return unminedDifference;
+      const latestDifference = freshnessUploadTime(b) - freshnessUploadTime(a);
+      if (latestDifference !== 0) return latestDifference;
+    }
+    return (a.title ?? a.handle ?? a.channel_id).localeCompare(
+      b.title ?? b.handle ?? b.channel_id,
+    );
+  });
+}
+
+function freshnessSortValue(seed: RawChannelRow): number {
+  const freshness = seed.mining_freshness;
+  if (!freshness) return -2;
+  if (freshness.never_mined) return 1_000_000;
+  if (freshness.status !== "ok") return -1;
+  return freshness.unmined_count ?? 0;
+}
+
+function freshnessUploadTime(seed: RawChannelRow): number {
+  const parsed = Date.parse(seed.mining_freshness?.latest_upload_at ?? "");
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function snoozeUntil(duration: "1" | "3" | "6" | "custom", customDate: string): string {

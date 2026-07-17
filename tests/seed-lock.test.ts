@@ -86,6 +86,55 @@ test("direct API calls cannot expand, regenerate, unseed, or patch a locked seed
   assert.deepEqual(state.seedMutations, []);
 });
 
+test("locked seeds can refresh read-only RSS freshness without unlocking", async () => {
+  const worker = await workerPromise;
+  const state = createFakeD1State({
+    lockedSeed: {
+      channel_id: LOCKED_CHANNEL_ID,
+      title: "Brian Lagerstrom",
+      handle: "BrianLagerstrom",
+      is_seed: 1,
+      seed_locked: 1,
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  let outboundFetches = 0;
+  globalThis.fetch = async (input) => {
+    outboundFetches += 1;
+    assert.match(String(input), /youtube\.com\/feeds\/videos\.xml/);
+    return new Response(`
+      <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+        <entry>
+          <yt:videoId>new-upload</yt:videoId>
+          <title>New upload</title>
+          <published>2026-07-17T12:00:00Z</published>
+        </entry>
+      </feed>
+    `);
+  };
+
+  try {
+    const response = await worker.fetch(
+      apiRequest(`/api/seeds/${LOCKED_CHANNEL_ID}/freshness`, "POST", { force: true }),
+      testEnv(state.db),
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json() as { never_mined: boolean; unmined_count: number | null; status: string };
+    assert.deepEqual(body, {
+      ...body,
+      never_mined: true,
+      unmined_count: null,
+      status: "ok",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(outboundFetches, 1);
+  assert.equal(state.freshnessMutations.length, 1);
+  assert.deepEqual(state.seedMutations, []);
+});
+
 test("global regen with an empty server target set performs no seed computation", async () => {
   const worker = await workerPromise;
   const state = createFakeD1State({ operationTargets: [] });
@@ -142,6 +191,7 @@ interface FakeSeedRow {
 interface FakeState {
   db: D1Database;
   seedMutations: string[];
+  freshnessMutations: string[];
   operationTargetReads: number;
 }
 
@@ -153,6 +203,7 @@ function createFakeD1State({
   operationTargets?: FakeSeedRow[];
 }): FakeState {
   const seedMutations: string[] = [];
+  const freshnessMutations: string[] = [];
   let operationTargetReads = 0;
 
   class FakeStatement {
@@ -167,6 +218,13 @@ function createFakeD1State({
 
     async first<T = Record<string, unknown>>(_columnName?: string): Promise<T | null> {
       if (this.query.includes("FROM auth_failures")) return null;
+      if (this.query.includes("COUNT(*) AS stored_video_count")) {
+        return {
+          stored_video_count: 0,
+          newest_stored_video_at: null,
+        } as T;
+      }
+      if (this.query.includes("FROM seed_mining_freshness")) return null;
       if (this.query.includes("FROM channels WHERE channel_id = ?")) {
         assert.equal(this.bindings[0], LOCKED_CHANNEL_ID);
         return lockedSeed as T | null;
@@ -176,11 +234,18 @@ function createFakeD1State({
 
     async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
       if (this.query.startsWith("DELETE FROM auth_failures")) return d1Result<T>([]);
+      if (this.query.includes("INSERT INTO seed_mining_freshness")) {
+        freshnessMutations.push(this.query);
+        return d1Result<T>([]);
+      }
       seedMutations.push(this.query);
       throw new Error(`Unexpected seed mutation: ${this.query}`);
     }
 
     async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+      if (this.query.includes("SELECT video_id, published_at") && this.query.includes("FROM videos")) {
+        return d1Result<T>([]);
+      }
       if (this.query.includes("COUNT(v.video_id) AS stored_video_count")) {
         operationTargetReads += 1;
         return d1Result(operationTargets.map((target) => ({
@@ -219,6 +284,7 @@ function createFakeD1State({
   return {
     db,
     seedMutations,
+    freshnessMutations,
     get operationTargetReads() {
       return operationTargetReads;
     },

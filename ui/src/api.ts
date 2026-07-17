@@ -112,6 +112,21 @@ export interface RawChannelRow {
   latest_snapshot_at?: string | null;
   snapshots?: SnapshotPoint[];
   query_phrases?: string[];
+  mining_freshness?: SeedMiningFreshness | null;
+}
+
+export interface SeedMiningFreshness {
+  latest_upload_at: string | null;
+  newest_stored_video_at: string | null;
+  stored_video_count: number;
+  unmined_count: number | null;
+  unmined_is_lower_bound: boolean;
+  never_mined: boolean;
+  rss_entry_count: number;
+  status: "ok" | "empty" | "error";
+  error: string | null;
+  checked_at: string;
+  stale: boolean;
 }
 
 export interface SnapshotPoint {
@@ -355,6 +370,16 @@ export class ScoutApi {
       method: "POST",
       body: JSON.stringify({ maxPages, maxResolves }),
     });
+  }
+
+  refreshSeedFreshness(channelId: string, force = false) {
+    return this.request<SeedMiningFreshness>(
+      `/api/seeds/${encodeURIComponent(channelId)}/freshness`,
+      {
+        method: "POST",
+        body: JSON.stringify({ force }),
+      },
+    );
   }
 
   patchChannel(channelId: string, body: Partial<{

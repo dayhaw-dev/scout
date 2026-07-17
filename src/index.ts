@@ -64,12 +64,19 @@ import {
   hasExplicitEmptySeedTargets,
   MIN_SEED_QUERY_VIDEOS,
 } from "./lib/seed-targets";
+import {
+  deriveSeedFreshness,
+  fetchYouTubeRssUploads,
+  seedFreshnessCacheIsFresh,
+  StoredSeedVideo,
+} from "./lib/seed-freshness";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
 type ShortlistDiscoveryFilter = "mention" | "collab" | "search";
 type ShortlistStatusFilter = ChannelStatus | "all";
+type SeedFreshnessStatus = "ok" | "empty" | "error";
 
 const SEARCH_FAILED_REF_SOURCE = "__search__";
 const SNAPSHOT_JOB_KIND = "snapshot";
@@ -116,6 +123,7 @@ export default {
     try {
       const url = new URL(request.url);
       const expandMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/expand$/);
+      const seedFreshnessMatch = url.pathname.match(/^\/api\/seeds\/([^/]+)\/freshness$/);
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
       const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
       const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
@@ -131,6 +139,16 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return expandAllSeeds();
+      }
+
+      if (seedFreshnessMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await refreshSeedFreshness(
+          decodeURIComponent(seedFreshnessMatch[1]),
+          request,
+          env,
+        );
       }
 
       if (url.pathname === "/api/channels" && request.method === "GET") {
@@ -356,12 +374,34 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
           SELECT COUNT(*)
           FROM channels resolved
           WHERE resolved.source_channel_id = c.channel_id
-        ) AS yield_count
+        ) AS yield_count,
+        COALESCE(video_stats.stored_video_count, 0) AS current_stored_video_count,
+        video_stats.newest_stored_video_at AS current_newest_stored_video_at,
+        freshness.latest_upload_at AS freshness_latest_upload_at,
+        freshness.newest_stored_video_at AS freshness_newest_stored_video_at,
+        freshness.stored_video_count AS freshness_stored_video_count,
+        freshness.unmined_count AS freshness_unmined_count,
+        freshness.unmined_is_lower_bound AS freshness_unmined_is_lower_bound,
+        freshness.never_mined AS freshness_never_mined,
+        freshness.rss_entry_count AS freshness_rss_entry_count,
+        freshness.status AS freshness_status,
+        freshness.error AS freshness_error,
+        freshness.checked_at AS freshness_checked_at
       FROM channels c
+      LEFT JOIN (
+        SELECT
+          channel_id,
+          COUNT(*) AS stored_video_count,
+          MAX(published_at) AS newest_stored_video_at
+        FROM videos
+        GROUP BY channel_id
+      ) video_stats ON video_stats.channel_id = c.channel_id
+      LEFT JOIN seed_mining_freshness freshness
+        ON freshness.channel_id = c.channel_id
       WHERE c.is_seed = 1
       ORDER BY yield_count DESC, c.created_at DESC
       LIMIT 100`,
-    ).all<ChannelRow & { yield_count: number }>();
+    ).all<SeedListRow>();
     const growth = await growthMapForChannels(env, results.map((row) => row.channel_id));
     const queryPhrases = await storedSeedQueryPhraseMap(env, results.map((row) => row.channel_id));
     const sponsorRollups = await sponsorRollupMapForChannels(env, results.map((row) => row.channel_id));
@@ -373,6 +413,7 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
         ...growthFields(growth.get(row.channel_id)),
         ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
         query_phrases: queryPhrases.get(row.channel_id) ?? [],
+        mining_freshness: seedFreshnessView(row),
       })),
     });
   }
@@ -397,6 +438,198 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
       ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
     })),
   });
+}
+
+async function refreshSeedFreshness(
+  channelId: string,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const seed = await env.SCOUT_DB.prepare(
+    "SELECT channel_id FROM channels WHERE channel_id = ? AND is_seed = 1",
+  )
+    .bind(channelId)
+    .first<{ channel_id: string }>();
+  if (!seed) throw new ResponseError("Seed channel not found.", 404);
+
+  const body = await parseOptionalJson<{ force?: unknown }>(request);
+  if (body.force !== undefined && typeof body.force !== "boolean") {
+    throw new ResponseError("force must be a boolean.", 400);
+  }
+  const force = body.force === true;
+
+  const stats = await seedStoredVideoStats(env, channelId);
+  const cached = await env.SCOUT_DB.prepare(
+    "SELECT * FROM seed_mining_freshness WHERE channel_id = ?",
+  )
+    .bind(channelId)
+    .first<SeedFreshnessCacheRow>();
+
+  if (
+    cached
+    && !force
+    && seedFreshnessCacheIsFresh(
+      cached.checked_at,
+      cached.stored_video_count,
+      cached.newest_stored_video_at,
+      stats.stored_video_count,
+      stats.newest_stored_video_at,
+    )
+  ) {
+    return json({ ...seedFreshnessPayload(cached), cached: true });
+  }
+
+  const stored = await env.SCOUT_DB.prepare(
+    `SELECT video_id, published_at
+    FROM videos
+    WHERE channel_id = ?
+    ORDER BY
+      CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(published_at) DESC,
+      created_at DESC
+    LIMIT 100`,
+  )
+    .bind(channelId)
+    .all<StoredSeedVideo>();
+
+  const checkedAt = new Date().toISOString();
+  let row: SeedFreshnessCacheRow;
+  try {
+    const rssEntries = await fetchYouTubeRssUploads(channelId);
+    const derived = deriveSeedFreshness(
+      rssEntries,
+      stored.results,
+      stats.stored_video_count,
+    );
+    row = {
+      channel_id: channelId,
+      ...derived,
+      unmined_is_lower_bound: derived.unmined_is_lower_bound ? 1 : 0,
+      never_mined: derived.never_mined ? 1 : 0,
+      status: rssEntries.length === 0 ? "empty" : "ok",
+      error: null,
+      checked_at: checkedAt,
+    };
+  } catch (error) {
+    row = {
+      channel_id: channelId,
+      latest_upload_at: null,
+      newest_stored_video_at: stats.newest_stored_video_at,
+      stored_video_count: stats.stored_video_count,
+      unmined_count: null,
+      unmined_is_lower_bound: 0,
+      never_mined: stats.stored_video_count === 0 ? 1 : 0,
+      rss_entry_count: 0,
+      status: "error",
+      error: errorMessage(error),
+      checked_at: checkedAt,
+    };
+  }
+
+  await env.SCOUT_DB.prepare(
+    `INSERT INTO seed_mining_freshness (
+      channel_id,
+      latest_upload_at,
+      newest_stored_video_at,
+      stored_video_count,
+      unmined_count,
+      unmined_is_lower_bound,
+      never_mined,
+      rss_entry_count,
+      status,
+      error,
+      checked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(channel_id) DO UPDATE SET
+      latest_upload_at = excluded.latest_upload_at,
+      newest_stored_video_at = excluded.newest_stored_video_at,
+      stored_video_count = excluded.stored_video_count,
+      unmined_count = excluded.unmined_count,
+      unmined_is_lower_bound = excluded.unmined_is_lower_bound,
+      never_mined = excluded.never_mined,
+      rss_entry_count = excluded.rss_entry_count,
+      status = excluded.status,
+      error = excluded.error,
+      checked_at = excluded.checked_at`,
+  )
+    .bind(
+      row.channel_id,
+      row.latest_upload_at,
+      row.newest_stored_video_at,
+      row.stored_video_count,
+      row.unmined_count,
+      row.unmined_is_lower_bound,
+      row.never_mined,
+      row.rss_entry_count,
+      row.status,
+      row.error,
+      row.checked_at,
+    )
+    .run();
+
+  return json({ ...seedFreshnessPayload(row), cached: false });
+}
+
+async function seedStoredVideoStats(
+  env: Env,
+  channelId: string,
+): Promise<SeedStoredVideoStats> {
+  const row = await env.SCOUT_DB.prepare(
+    `SELECT
+      COUNT(*) AS stored_video_count,
+      MAX(published_at) AS newest_stored_video_at
+    FROM videos
+    WHERE channel_id = ?`,
+  )
+    .bind(channelId)
+    .first<SeedStoredVideoStats>();
+  return {
+    stored_video_count: Number(row?.stored_video_count ?? 0),
+    newest_stored_video_at: row?.newest_stored_video_at ?? null,
+  };
+}
+
+function seedFreshnessPayload(row: SeedFreshnessCacheRow): SeedFreshnessView {
+  return {
+    latest_upload_at: row.latest_upload_at,
+    newest_stored_video_at: row.newest_stored_video_at,
+    stored_video_count: Number(row.stored_video_count),
+    unmined_count: row.unmined_count === null ? null : Number(row.unmined_count),
+    unmined_is_lower_bound: row.unmined_is_lower_bound === 1,
+    never_mined: row.never_mined === 1,
+    rss_entry_count: Number(row.rss_entry_count),
+    status: row.status,
+    error: row.error,
+    checked_at: row.checked_at,
+    stale: false,
+  };
+}
+
+function seedFreshnessView(row: SeedListRow): SeedFreshnessView | null {
+  if (!row.freshness_checked_at || !row.freshness_status) return null;
+  const cached: SeedFreshnessCacheRow = {
+    channel_id: row.channel_id,
+    latest_upload_at: row.freshness_latest_upload_at,
+    newest_stored_video_at: row.freshness_newest_stored_video_at,
+    stored_video_count: Number(row.freshness_stored_video_count ?? 0),
+    unmined_count: row.freshness_unmined_count,
+    unmined_is_lower_bound: Number(row.freshness_unmined_is_lower_bound ?? 0),
+    never_mined: Number(row.freshness_never_mined ?? 0),
+    rss_entry_count: Number(row.freshness_rss_entry_count ?? 0),
+    status: row.freshness_status,
+    error: row.freshness_error,
+    checked_at: row.freshness_checked_at,
+  };
+  return {
+    ...seedFreshnessPayload(cached),
+    stale: !seedFreshnessCacheIsFresh(
+      cached.checked_at,
+      cached.stored_video_count,
+      cached.newest_stored_video_at,
+      Number(row.current_stored_video_count),
+      row.current_newest_stored_video_at,
+    ),
+  };
 }
 
 async function classifyAll(env: Env): Promise<Response> {
@@ -2933,6 +3166,55 @@ interface ChannelRow {
   recent_velocity: number | null;
   created_at: string;
   updated_at: string;
+}
+
+interface SeedListRow extends ChannelRow {
+  yield_count: number;
+  current_stored_video_count: number;
+  current_newest_stored_video_at: string | null;
+  freshness_latest_upload_at: string | null;
+  freshness_newest_stored_video_at: string | null;
+  freshness_stored_video_count: number | null;
+  freshness_unmined_count: number | null;
+  freshness_unmined_is_lower_bound: number | null;
+  freshness_never_mined: number | null;
+  freshness_rss_entry_count: number | null;
+  freshness_status: SeedFreshnessStatus | null;
+  freshness_error: string | null;
+  freshness_checked_at: string | null;
+}
+
+interface SeedStoredVideoStats {
+  stored_video_count: number;
+  newest_stored_video_at: string | null;
+}
+
+interface SeedFreshnessCacheRow {
+  channel_id: string;
+  latest_upload_at: string | null;
+  newest_stored_video_at: string | null;
+  stored_video_count: number;
+  unmined_count: number | null;
+  unmined_is_lower_bound: number;
+  never_mined: number;
+  rss_entry_count: number;
+  status: SeedFreshnessStatus;
+  error: string | null;
+  checked_at: string;
+}
+
+interface SeedFreshnessView {
+  latest_upload_at: string | null;
+  newest_stored_video_at: string | null;
+  stored_video_count: number;
+  unmined_count: number | null;
+  unmined_is_lower_bound: boolean;
+  never_mined: boolean;
+  rss_entry_count: number;
+  status: SeedFreshnessStatus;
+  error: string | null;
+  checked_at: string;
+  stale: boolean;
 }
 
 interface ChannelSummaryRow extends ChannelRow {

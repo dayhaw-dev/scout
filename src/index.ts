@@ -60,6 +60,10 @@ import {
   planSnoozeTransition,
   SnoozeValidationError,
 } from "./lib/snooze";
+import {
+  hasExplicitEmptySeedTargets,
+  MIN_SEED_QUERY_VIDEOS,
+} from "./lib/seed-targets";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
@@ -162,7 +166,13 @@ export default {
       if (url.pathname === "/api/admin/mine-queries" && request.method === "POST") {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
-        return mineQueries(request, env);
+        return await mineQueries(request, env);
+      }
+
+      if (url.pathname === "/api/admin/mine-queries/plan" && request.method === "GET") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await mineQueriesPlan(env);
       }
 
       if (url.pathname === "/api/admin/repair-yields" && request.method === "POST") {
@@ -252,13 +262,13 @@ export default {
       if (patchChannelMatch && request.method === "PATCH") {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
-        return patchChannel(decodeURIComponent(patchChannelMatch[1]), request, env);
+        return await patchChannel(decodeURIComponent(patchChannelMatch[1]), request, env);
       }
 
       if (expandMatch && request.method === "POST") {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
-        return expandSeed(decodeURIComponent(expandMatch[1]), request, env);
+        return await expandSeed(decodeURIComponent(expandMatch[1]), request, env);
       }
 
       if (!url.pathname.startsWith("/api/")) {
@@ -359,6 +369,7 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
     return json({
       channels: results.map((row) => ({
         ...row,
+        seed_locked: row.seed_locked === 1,
         ...growthFields(growth.get(row.channel_id)),
         ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
         query_phrases: queryPhrases.get(row.channel_id) ?? [],
@@ -381,6 +392,7 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
   return json({
     channels: results.map((row) => ({
       ...row,
+      seed_locked: row.seed_locked === 1,
       ...growthFields(growth.get(row.channel_id)),
       ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
     })),
@@ -454,12 +466,7 @@ async function patchChannel(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const existing = await env.SCOUT_DB.prepare(
-    "SELECT * FROM channels WHERE channel_id = ?",
-  )
-    .bind(channelId)
-    .first<ChannelRow>();
-  if (!existing) return json({ error: "Channel not found" }, 404);
+  const existing = await requireMutableChannel(env, channelId);
 
   const body = await parseJson<{
     kind?: unknown;
@@ -562,6 +569,32 @@ async function patchChannel(
     .run();
 
   return json(await getChannel(env, channelId));
+}
+
+async function requireMutableChannel(env: Env, channelId: string): Promise<ChannelRow> {
+  const channel = await env.SCOUT_DB.prepare(
+    "SELECT * FROM channels WHERE channel_id = ?",
+  )
+    .bind(channelId)
+    .first<ChannelRow>();
+  if (!channel) throw new ResponseError("Channel not found.", 404);
+  if (channel.is_seed === 1 && channel.seed_locked === 1) {
+    throw new ResponseError("Seed is locked and cannot be modified.", 423);
+  }
+  return channel;
+}
+
+async function requireUnlockedSeed(env: Env, channelId: string): Promise<ChannelRow> {
+  const seed = await env.SCOUT_DB.prepare(
+    "SELECT * FROM channels WHERE channel_id = ? AND is_seed = 1",
+  )
+    .bind(channelId)
+    .first<ChannelRow>();
+  if (!seed) throw new ResponseError("Seed channel not found.", 404);
+  if (seed.seed_locked === 1) {
+    throw new ResponseError("Seed is locked and cannot be modified.", 423);
+  }
+  return seed;
 }
 
 async function logOutreach(
@@ -1404,11 +1437,27 @@ async function mineQueries(request: Request, env: Env): Promise<Response> {
   const channelId = typeof (body.channel_id ?? body.channelId) === "string"
     ? String(body.channel_id ?? body.channelId)
     : null;
-  const seedIds = channelId ? [channelId] : undefined;
+  let seedIds: string[];
+  if (channelId) {
+    await requireUnlockedSeed(env, channelId);
+    const [target] = await seedOperationTargets(env, [channelId]);
+    if (!target) {
+      throw new ResponseError("Seed channel not found.", 404);
+    }
+    if (target.stored_video_count < MIN_SEED_QUERY_VIDEOS) {
+      throw new ResponseError(
+        `Seed query regeneration requires at least ${MIN_SEED_QUERY_VIDEOS} stored videos; this seed has ${target.stored_video_count}. Expand it first.`,
+        409,
+      );
+    }
+    seedIds = [channelId];
+  } else {
+    seedIds = (await eligibleMineQueryTargets(env)).map((target) => target.channel_id);
+  }
   const force = body.force === true;
   const [queries, topics] = await Promise.all([
     computeSeedQueries(env, seedIds, { force }),
-    computeSeedTopics(env, seedIds),
+    computeSeedTopics(env, seedIds, { requireStoredVideos: true }),
   ]);
   return json({
     seeds_considered: Math.max(queries.seeds_considered, topics.seeds_considered),
@@ -1422,6 +1471,100 @@ async function mineQueries(request: Request, env: Env): Promise<Response> {
     output_tokens: queries.output_tokens,
     source: queries.source,
   });
+}
+
+async function mineQueriesPlan(env: Env): Promise<Response> {
+  const targets = await seedOperationTargets(env);
+  const eligible = targets.filter(isEligibleMineQueryTarget);
+  return json({
+    target_count: eligible.length,
+    locked_count: targets.filter((target) => target.seed_locked === 1).length,
+    insufficient_video_count: targets.filter((target) => (
+      target.seed_locked !== 1
+      && target.stored_video_count < MIN_SEED_QUERY_VIDEOS
+    )).length,
+    minimum_stored_videos: MIN_SEED_QUERY_VIDEOS,
+    targets: eligible.map((target) => ({
+      channel_id: target.channel_id,
+      title: target.title,
+      handle: target.handle,
+      stored_video_count: target.stored_video_count,
+    })),
+  });
+}
+
+interface SeedOperationTarget {
+  channel_id: string;
+  title: string | null;
+  handle: string | null;
+  seed_locked: number;
+  stored_video_count: number;
+}
+
+async function seedOperationTargets(
+  env: Env,
+  seedIds?: string[],
+): Promise<SeedOperationTarget[]> {
+  if (hasExplicitEmptySeedTargets(seedIds)) return [];
+  const seedFilter = seedIds !== undefined
+    ? `AND s.channel_id IN (${seedIds.map(() => "?").join(", ")})`
+    : "";
+  const statement = env.SCOUT_DB.prepare(
+    `SELECT
+      s.channel_id,
+      s.title,
+      s.handle,
+      s.seed_locked,
+      COUNT(v.video_id) AS stored_video_count
+    FROM channels s
+    LEFT JOIN videos v ON v.channel_id = s.channel_id
+    WHERE s.is_seed = 1
+      ${seedFilter}
+    GROUP BY s.channel_id, s.title, s.handle, s.seed_locked
+    ORDER BY s.title ASC`,
+  );
+  const { results } = await (seedIds !== undefined ? statement.bind(...seedIds) : statement)
+    .all<Omit<SeedOperationTarget, "stored_video_count"> & { stored_video_count: number | null }>();
+  return results.map((row) => ({
+    ...row,
+    stored_video_count: Number(row.stored_video_count ?? 0),
+  }));
+}
+
+function isEligibleMineQueryTarget(target: SeedOperationTarget): boolean {
+  return target.seed_locked !== 1
+    && target.stored_video_count >= MIN_SEED_QUERY_VIDEOS;
+}
+
+async function eligibleMineQueryTargets(
+  env: Env,
+  seedIds?: string[],
+): Promise<SeedOperationTarget[]> {
+  return (await seedOperationTargets(env, seedIds)).filter(isEligibleMineQueryTarget);
+}
+
+function emptySeedQueryComputation(): {
+  seeds_considered: number;
+  phrases_written: number;
+  seeds_generated: number;
+  seeds_skipped: number;
+  llm_seeds: number;
+  fallback_seeds: number;
+  input_tokens: number;
+  output_tokens: number;
+  source: "skipped";
+} {
+  return {
+    seeds_considered: 0,
+    phrases_written: 0,
+    seeds_generated: 0,
+    seeds_skipped: 0,
+    llm_seeds: 0,
+    fallback_seeds: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    source: "skipped",
+  };
 }
 
 async function computeSeedQueries(
@@ -1439,9 +1582,12 @@ async function computeSeedQueries(
   output_tokens: number;
   source: "llm" | "ngram" | "mixed" | "skipped";
 }> {
+  const authorizedTargets = await eligibleMineQueryTargets(env, seedIds);
+  if (authorizedTargets.length === 0) return emptySeedQueryComputation();
   const startedAt = new Date().toISOString();
-  const allSeeds = await titleMiningSeeds(env);
-  const selectedIds = new Set(seedIds && seedIds.length > 0 ? seedIds : allSeeds.map((seed) => seed.channel_id));
+  const allTargetIds = (await eligibleMineQueryTargets(env)).map((target) => target.channel_id);
+  const allSeeds = await titleMiningSeeds(env, allTargetIds);
+  const selectedIds = new Set(authorizedTargets.map((target) => target.channel_id));
   const blocked = await suggestionBlocklist(env);
   const anthropic = new AnthropicClient(env);
   let phrasesWritten = 0;
@@ -1689,8 +1835,18 @@ function truncateJobText(value: string, maxLength = 2000): string {
 async function computeSeedTopics(
   env: Env,
   seedIds?: string[],
+  options: { requireStoredVideos?: boolean } = {},
 ): Promise<{ seeds_considered: number; topics_written: number }> {
-  const seeds = await suggestionSeeds(env, seedIds);
+  const authorizedTargets = options.requireStoredVideos
+    ? await eligibleMineQueryTargets(env, seedIds)
+    : (await seedOperationTargets(env, seedIds)).filter((target) => target.seed_locked !== 1);
+  if (authorizedTargets.length === 0) {
+    return { seeds_considered: 0, topics_written: 0 };
+  }
+  const seeds = await suggestionSeeds(
+    env,
+    authorizedTargets.map((target) => target.channel_id),
+  );
   const blocked = await suggestionBlocklist(env);
   let topicsWritten = 0;
 
@@ -1782,17 +1938,19 @@ async function seedRows(env: Env): Promise<ChannelRow[]> {
 }
 
 async function suggestionSeeds(env: Env, seedIds?: string[]): Promise<SuggestionSeed[]> {
-  const seedFilter = seedIds && seedIds.length > 0
+  if (hasExplicitEmptySeedTargets(seedIds)) return [];
+  const seedFilter = seedIds !== undefined
     ? `AND channel_id IN (${seedIds.map(() => "?").join(", ")})`
     : "";
   const statement = env.SCOUT_DB.prepare(
     `SELECT channel_id, title, handle, raw_json
     FROM channels
     WHERE is_seed = 1
+      AND seed_locked = 0
       ${seedFilter}
     ORDER BY title ASC`,
   );
-  const { results } = await (seedIds && seedIds.length > 0 ? statement.bind(...seedIds) : statement)
+  const { results } = await (seedIds !== undefined ? statement.bind(...seedIds) : statement)
     .all<SuggestionSeed>();
   return results;
 }
@@ -1897,6 +2055,7 @@ async function storedTopicSuggestions(
     FROM seed_topics t
     JOIN channels s ON s.channel_id = t.channel_id
     WHERE s.is_seed = 1
+      AND s.seed_locked = 0
     ORDER BY t.rank ASC, t.term ASC
     LIMIT 1000`,
   ).all<{
@@ -1929,6 +2088,7 @@ async function storedContentSuggestions(
     FROM seed_queries q
     JOIN channels s ON s.channel_id = q.channel_id
     WHERE s.is_seed = 1
+      AND s.seed_locked = 0
     ORDER BY
       CASE q.source WHEN 'llm' THEN 0 ELSE 1 END,
       q.rank ASC,
@@ -2004,7 +2164,8 @@ function aggregateStoredSuggestions(
 }
 
 async function titleMiningSeeds(env: Env, seedIds?: string[]): Promise<TitleMiningSeed[]> {
-  const seedFilter = seedIds && seedIds.length > 0
+  if (hasExplicitEmptySeedTargets(seedIds)) return [];
+  const seedFilter = seedIds !== undefined
     ? `AND s.channel_id IN (${seedIds.map(() => "?").join(", ")})`
     : "";
   const statement = env.SCOUT_DB.prepare(
@@ -2020,10 +2181,11 @@ async function titleMiningSeeds(env: Env, seedIds?: string[]): Promise<TitleMini
     FROM channels s
     LEFT JOIN videos v ON v.channel_id = s.channel_id
     WHERE s.is_seed = 1
+      AND s.seed_locked = 0
       ${seedFilter}
     ORDER BY s.channel_id, v.published_at DESC, v.created_at DESC`,
   );
-  const { results } = await (seedIds && seedIds.length > 0 ? statement.bind(...seedIds) : statement).all<{
+  const { results } = await (seedIds !== undefined ? statement.bind(...seedIds) : statement).all<{
       channel_id: string;
       title: string | null;
       handle: string | null;
@@ -2741,6 +2903,7 @@ interface ChannelRow {
   published_at: string | null;
   thumbnail_url: string | null;
   is_seed: number;
+  seed_locked: number;
   discovered_via: string;
   source_channel_id: string | null;
   search_query: string | null;
@@ -2886,15 +3049,7 @@ async function expandSeed(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const seed = await env.SCOUT_DB.prepare(
-    "SELECT * FROM channels WHERE channel_id = ? AND is_seed = 1",
-  )
-    .bind(channelId)
-    .first<ChannelRow>();
-
-  if (!seed) {
-    return json({ error: "Seed channel not found" }, 404);
-  }
+  const seed = await requireUnlockedSeed(env, channelId);
 
   const body = await parseOptionalJson<{
     maxPages?: unknown;
@@ -2928,7 +3083,8 @@ async function runSeedExpansion(
   maxResolves: number,
   creditCounter?: { value: number },
 ): Promise<ExpansionResult> {
-  const channelId = seed.channel_id;
+  const authorizedSeed = await requireUnlockedSeed(env, seed.channel_id);
+  const channelId = authorizedSeed.channel_id;
   const creditsBefore = creditCounter ? creditCounter.value : await totalCreditsUsed(env);
   const fetchedVideos: ScrapeCreatorsVideoListItem[] = [];
   let continuationToken: string | undefined;
@@ -2948,7 +3104,7 @@ async function runSeedExpansion(
   await upsertVideos(env, channelId, fetchedVideos);
   await computeSeedQueries(env, [channelId]);
 
-  const aggregated = aggregateRefs(seed, fetchedVideos);
+  const aggregated = aggregateRefs(authorizedSeed, fetchedVideos);
   const failedRefs = await failedRefSet(env, channelId);
   const { filtered: withoutExisting, skipped: refsSkippedExisting } =
     await dropExistingRefs(env, aggregated);
@@ -3418,6 +3574,7 @@ function channelSummary(
     handle: row.handle,
     thumbnail_url: row.thumbnail_url,
     is_seed: row.is_seed === 1,
+    seed_locked: row.seed_locked === 1,
     subscriber_count: row.subscriber_count,
     score: row.score,
     score_breakdown: parseScoreBreakdown(row.score_breakdown),

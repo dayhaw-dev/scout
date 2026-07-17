@@ -9,6 +9,8 @@ import {
   ChannelStatus,
   EnrichSummary,
   ExpandAllSeedsSummary,
+  MineQueriesPlan,
+  MineQueriesTarget,
   OutreachStatus,
   RawChannelRow,
   ScoutApi,
@@ -1364,6 +1366,7 @@ function SeedsView({
   const [batchSummary, setBatchSummary] = useState<ExpandAllSeedsSummary | null>(null);
   const [searches, setSearches] = useState<SearchRecord[]>([]);
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
+  const unlockedSeeds = useMemo(() => seeds.filter((seed) => !seed.seed_locked), [seeds]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1407,9 +1410,10 @@ function SeedsView({
 
   async function expandAll() {
     if (bulk.active) return;
+    if (unlockedSeeds.length === 0) return;
     const controller = bulk.start();
     try {
-      const result = await runClientExpandAllSeeds(api, seeds, controller, bulk.update, onChanged);
+      const result = await runClientExpandAllSeeds(api, unlockedSeeds, controller, bulk.update, onChanged);
       setBatchSummary(result);
       setSummary(null);
       await load();
@@ -1443,17 +1447,34 @@ function SeedsView({
 
   async function regenerateQueries() {
     if (bulk.active) return;
+    let plan: MineQueriesPlan;
+    try {
+      plan = await api.mineQueriesPlan();
+    } catch (error) {
+      onError(error);
+      return;
+    }
+    if (plan.target_count === 0) {
+      onToast({
+        message: `No seeds are eligible for query regeneration. ${plan.locked_count} locked; ${plan.insufficient_video_count} below ${plan.minimum_stored_videos} stored videos.`,
+      });
+      return;
+    }
+    const confirmed = window.confirm(
+      `Regenerate queries for exactly ${plan.target_count} unlocked seed(s)?\n\n${plan.locked_count} locked seed(s) will be skipped. ${plan.insufficient_video_count} seed(s) with fewer than ${plan.minimum_stored_videos} stored videos will be skipped.`,
+    );
+    if (!confirmed) return;
     const controller = bulk.start();
     try {
       const result = await runBulkOperation({
         action: "Regenerating queries",
-        items: seeds.map((seed) => ({
-          id: seed.channel_id,
-          label: seed.title ?? seed.handle ?? seed.channel_id,
-          value: seed,
+        items: plan.targets.map((target) => ({
+          id: target.channel_id,
+          label: target.title ?? target.handle ?? target.channel_id,
+          value: target,
         })),
         controller,
-        runItem: (seed) => api.mineQueries({ channel_id: seed.channel_id, force: true }),
+        runItem: (target: MineQueriesTarget) => api.mineQueries({ channel_id: target.channel_id, force: true }),
         getCredits: () => 0,
         getErrorMessage: errorMessage,
         onProgress: bulk.update,
@@ -1505,10 +1526,10 @@ function SeedsView({
         <button
           type="button"
           onClick={() => void expandAll()}
-          disabled={bulk.active || seeds.length === 0}
+          disabled={bulk.active || unlockedSeeds.length === 0}
           title="Runs maxPages 1 and maxResolves 10 per seed, stopping before the 150-credit cap."
         >
-          Expand All Seeds max {Math.min(EXPAND_ALL_CLIENT_CREDIT_CAP, seeds.length * 11)} credits
+          Expand All Seeds max {Math.min(EXPAND_ALL_CLIENT_CREDIT_CAP, unlockedSeeds.length * 11)} credits
         </button>
         <button
           type="button"
@@ -2766,6 +2787,7 @@ function SeedCard({
         <span className="chip status-chip">{seed.status}</span>
         <span className="chip">seed</span>
         <span className="chip">YIELD: {seed.yield_count ?? 0}</span>
+        {seed.seed_locked && <span className="chip locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
       </div>
       <GrowthChips row={seed} />
       <Sparkline points={seed.snapshots ?? []} />
@@ -2781,7 +2803,12 @@ function SeedCard({
             <div className="suggestions seed-query-list">
               {phrases.map((phrase) => (
                 <span className={`suggestion-chip ${searchedTerms.has(normalizeChipTerm(phrase)) ? "searched" : ""}`} key={phrase}>
-                  <button type="button" onClick={() => onQuery(phrase)}>
+                  <button
+                    type="button"
+                    onClick={() => onQuery(phrase)}
+                    disabled={seed.seed_locked}
+                    title={seed.seed_locked ? "Locked seed queries cannot be searched" : undefined}
+                  >
                     {searchedTerms.has(normalizeChipTerm(phrase)) && <span aria-hidden="true">✓ </span>}
                     {phrase}
                   </button>
@@ -2791,6 +2818,7 @@ function SeedCard({
                     aria-label={`Hide ${phrase}`}
                     title="Hide suggestion"
                     onClick={() => onDismissQuery(phrase)}
+                    disabled={seed.seed_locked}
                   >
                     x
                   </button>
@@ -2801,9 +2829,9 @@ function SeedCard({
         </div>
       )}
       <div className="card-actions">
-        <button onClick={onExpand}>Expand</button>
+        <button onClick={onExpand} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be expanded" : undefined}>Expand</button>
         <button onClick={onSnapshot}>Snapshot</button>
-        <button onClick={onUnseed}>Unseed</button>
+        <button onClick={onUnseed} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be unseeded" : undefined}>Unseed</button>
       </div>
     </article>
   );
@@ -3271,9 +3299,10 @@ async function runClientExpandAllSeeds(
   onProgress: (progress: BulkProgress) => void,
   onItemComplete: (index: number) => Promise<void> | void,
 ): Promise<ExpandAllSeedsSummary> {
+  const unlockedSeeds = seeds.filter((seed) => !seed.seed_locked);
   const result = await runBulkOperation({
     action: "Expanding",
-    items: seeds.map((seed) => ({
+    items: unlockedSeeds.map((seed) => ({
       id: seed.channel_id,
       label: seedLabel(seed),
       value: seed,
@@ -3309,7 +3338,7 @@ async function runClientExpandAllSeeds(
   return {
     aborted: result.cancelled || result.stoppedReason !== null,
     reason: result.cancelled ? "Cancelled by operator." : result.stoppedReason,
-    seeds_total: seeds.length,
+    seeds_total: unlockedSeeds.length,
     seeds_expanded: summaries.length,
     max_pages_per_seed: 1,
     max_resolves_per_seed: 10,

@@ -80,6 +80,7 @@ export interface RawChannelRow {
   title: string | null;
   thumbnail_url: string | null;
   is_seed: boolean;
+  seed_locked: boolean;
   subscriber_count: number | null;
   created_at: string;
   status: ChannelStatus;
@@ -162,6 +163,21 @@ export interface ExpandAllSeedsSummary {
     seed_handle: string | null;
     error: string;
   }>;
+}
+
+export interface MineQueriesTarget {
+  channel_id: string;
+  title: string | null;
+  handle: string | null;
+  stored_video_count: number;
+}
+
+export interface MineQueriesPlan {
+  target_count: number;
+  locked_count: number;
+  insufficient_video_count: number;
+  minimum_stored_videos: number;
+  targets: MineQueriesTarget[];
 }
 
 export interface SearchRecord {
@@ -453,6 +469,10 @@ export class ScoutApi {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  mineQueriesPlan() {
+    return this.request<MineQueriesPlan>("/api/admin/mine-queries/plan");
   }
 
   repairYields() {

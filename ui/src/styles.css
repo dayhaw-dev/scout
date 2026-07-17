@@ -1090,6 +1090,12 @@ a:hover {
   background: rgba(15, 23, 42, 0.55);
 }
 
+.locked-chip {
+  border-color: rgba(250, 204, 21, 0.5);
+  background: rgba(113, 63, 18, 0.34);
+  color: #fde68a;
+}
+
 .sparkline-wrap {
   position: relative;
   width: 100%;

@@ -20,6 +20,13 @@ export function shortlistStageClause(
     bindings.push(statusFilter);
   }
 
+  // Explicit pipeline views are exclusive routes. Outreach and currently
+  // active relationships must never fall through into prospect tabs.
+  if (statusFilter !== "all") {
+    clauses.push("c.outreach_stage = 'none'");
+    clauses.push("c.is_active = 0");
+  }
+
   if (seedFilter !== null) {
     clauses.push("c.is_seed = ?");
     bindings.push(seedFilter ? 1 : 0);

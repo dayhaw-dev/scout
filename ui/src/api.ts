@@ -1,6 +1,6 @@
 export type ChannelKind = "creator" | "brand" | "alt";
 export type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
-export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
+export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "pitched" | "signed" | "passed";
 export type DiscoverySource = "mention" | "collab" | "search";
 
 export interface ContactLink {
@@ -15,6 +15,8 @@ export interface ChannelCardRow {
   handle: string | null;
   thumbnail_url: string | null;
   is_seed: boolean;
+  seed_locked: boolean;
+  is_active: boolean;
   subscriber_count: number | null;
   score: number | null;
   score_breakdown: ScoreBreakdown | null;
@@ -81,6 +83,7 @@ export interface RawChannelRow {
   thumbnail_url: string | null;
   is_seed: boolean;
   seed_locked: boolean;
+  is_active: boolean;
   subscriber_count: number | null;
   created_at: string;
   status: ChannelStatus;
@@ -209,6 +212,7 @@ export interface BrandRow {
   channel_id: string;
   handle: string | null;
   title: string | null;
+  is_active: boolean;
   subscriber_count: number | null;
   country: string | null;
   links: string[];
@@ -231,8 +235,10 @@ export interface StatusPayload {
     pool: number;
     shortlist: number;
     seeds: number;
-    outreach_active: number;
+    outreach_live: number;
     outreach_closed: number;
+    active_relationships: number;
+    outreach_total: number;
   };
   last_search: SearchRecord | null;
   last_snapshot_run: SnapshotJob | null;
@@ -351,7 +357,7 @@ export class ScoutApi {
   }
 
   getOutreach() {
-    return this.request<{ active: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
+    return this.request<{ working: ChannelCardRow[]; live: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
   }
 
   listChannels(status: ChannelStatus | "seed") {
@@ -386,6 +392,7 @@ export class ScoutApi {
     status: ChannelStatus;
     kind: ChannelKind;
     is_seed: boolean;
+    is_active: boolean;
     email_confirmed: boolean;
     snoozed_until: string;
     snooze_reason: string;

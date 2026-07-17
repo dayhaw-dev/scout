@@ -952,6 +952,12 @@ a:hover {
   background: rgba(8, 47, 73, 0.44);
 }
 
+.active-relationship-chip {
+  border-color: rgba(52, 211, 153, 0.65);
+  color: #d1fae5;
+  background: rgba(6, 78, 59, 0.58);
+}
+
 .stale-chip {
   border-color: rgba(248, 113, 113, 0.62);
   color: #fecaca;
@@ -1621,6 +1627,10 @@ a:hover {
   border: 1px solid rgba(34, 211, 238, 0.18);
   background: rgba(10, 18, 32, 0.44);
   padding: 12px;
+}
+
+.outreach-live-heading {
+  margin-top: 18px;
 }
 
 .closed-section summary {

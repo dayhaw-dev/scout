@@ -13,6 +13,19 @@ test("outreach migration adds channel state and append-only log", () => {
   assert.match(migration, /idx_outreach_log_channel_created/);
 });
 
+test("outreach vocabulary and active relationship migration is additive", () => {
+  const migration = readFileSync("migrations/0023_outreach_routing_active.sql", "utf8");
+
+  assert.match(migration, /ALTER TABLE channels ADD COLUMN outreach_stage TEXT NOT NULL DEFAULT 'none'/);
+  assert.match(migration, /sent', 'replied', 'in_talks', 'pitched', 'signed', 'passed/);
+  assert.match(migration, /ALTER TABLE channels ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0/);
+  assert.match(migration, /WHEN 'ghosted' THEN 'passed'/);
+  assert.match(migration, /WHERE outreach_status <> 'none'/);
+  assert.doesNotMatch(migration, /CREATE TABLE\s+channels/i);
+  assert.doesNotMatch(migration, /DROP TABLE\s+channels/i);
+  assert.doesNotMatch(migration, /ALTER TABLE\s+channels\s+RENAME/i);
+});
+
 test("worker exposes outreach list and log endpoints", () => {
   const source = readFileSync("src/index.ts", "utf8");
 
@@ -21,18 +34,24 @@ test("worker exposes outreach list and log endpoints", () => {
   assert.match(source, /function logOutreach/);
   assert.match(source, /INSERT INTO outreach_log/);
   assert.match(source, /parseOutreachStatusFilter/);
-  assert.match(source, /c\.outreach_status = \?/);
-  assert.match(source, /outreach_status IN \('sent', 'replied', 'in_talks'\)/);
-  assert.match(source, /outreach_status IN \('signed', 'passed', 'ghosted'\)/);
-  assert.match(source, /status = 'shortlisted' AND outreach_status = 'none'/);
+  assert.match(source, /c\.outreach_stage = \?/);
+  assert.match(source, /LIVE_OUTREACH_SQL/);
+  assert.match(source, /CLOSED_OUTREACH_SQL/);
+  assert.match(source, /status = 'shortlisted' AND outreach_stage = 'none' AND is_active = 0/);
   assert.match(source, /c\.last_touch_at ASC/);
+  assert.match(source, /working: working\.map/);
+  assert.match(source, /is_active = 1/);
 });
 
-test("ui includes outreach tab, shortlist funnel filter, optional follow-up, stale flag, and signed seed prompt", () => {
+test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status chips", () => {
   const source = readFileSync("ui/src/App.tsx", "utf8");
 
   assert.match(source, /"outreach"/);
-  assert.match(source, /outreach_status: stage === "shortlist" \? "none" : null/);
+  assert.match(source, /Active \/ working with/i);
+  assert.match(source, /<strong>Live<\/strong>/);
+  assert.match(source, /"pitched"/);
+  assert.match(source, /active-relationship-chip/);
+  assert.match(source, /Mark ACTIVE \/ working with/);
   assert.match(source, /Log outreach/);
   assert.match(source, /Update status/);
   assert.match(source, /latest_outreach_note/);
@@ -41,6 +60,7 @@ test("ui includes outreach tab, shortlist funnel filter, optional follow-up, sta
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
   assert.doesNotMatch(source, /daysFromNowInput/);
   assert.match(source, /Closed \(\{closed\.length\}\)/);
+  assert.doesNotMatch(source, /ghosted/);
 });
 
 test("ui card actions use one primary action and overflow for secondary actions", () => {
@@ -53,7 +73,7 @@ test("ui card actions use one primary action and overflow for secondary actions"
   assert.match(source, /visibleSecondary: tab === "pool" \|\| tab === "shortlist" \|\| tab === "snoozed"/);
   assert.match(source, /secondary-action/);
   assert.match(source, /onEnrich=\{stage !== "rejected" && stage !== "snoozed" \? \(\) => void enrichCard\(channel\) : undefined\}/);
-  assert.match(source, /onEnrich=\{\(\) => void enrichCard\(channel\)\}/);
+  assert.match(source, /onEnrich=.*enrichCard\(channel\)/);
   assert.match(source, /enrichFreshDays: enrichmentFreshDays\(channel\)/);
   assert.match(source, /title: disabled \? `enriched \$\{enrichFreshDays\}d ago` : "Enrich activity"/);
   assert.match(source, /className="action-overflow"/);

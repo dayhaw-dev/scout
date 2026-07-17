@@ -69,6 +69,11 @@ test("direct API calls cannot expand, regenerate, unseed, or patch a locked seed
       apiRequest("/api/admin/mine-queries", "POST", { channel_id: LOCKED_CHANNEL_ID, force: true }),
       apiRequest(`/api/channels/${LOCKED_CHANNEL_ID}`, "PATCH", { is_seed: false }),
       apiRequest(`/api/channels/${LOCKED_CHANNEL_ID}`, "PATCH", { status: "rejected" }),
+      apiRequest(`/api/channels/${LOCKED_CHANNEL_ID}/outreach`, "POST", {
+        outreach_status: "sent",
+        note: "must not mutate",
+        next_followup_at: null,
+      }),
     ];
 
     for (const request of requests) {

@@ -70,9 +70,15 @@ import {
   seedFreshnessCacheIsUsable,
   StoredSeedVideo,
 } from "./lib/seed-freshness";
+import {
+  CLOSED_OUTREACH_STATUSES,
+  LIVE_OUTREACH_STATUSES,
+  OUTREACH_STATUSES,
+  outreachSqlList,
+  OutreachStatus,
+} from "./lib/outreach";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
-type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
 type ShortlistDiscoveryFilter = "mention" | "collab" | "search";
 type ShortlistStatusFilter = ChannelStatus | "all";
@@ -89,15 +95,9 @@ const VALID_STATUSES = new Set<ChannelStatus>([
   "rejected",
 ]);
 
-const VALID_OUTREACH_STATUSES = new Set<OutreachStatus>([
-  "none",
-  "sent",
-  "replied",
-  "in_talks",
-  "signed",
-  "passed",
-  "ghosted",
-]);
+const VALID_OUTREACH_STATUSES = new Set<OutreachStatus>(OUTREACH_STATUSES);
+const LIVE_OUTREACH_SQL = outreachSqlList(LIVE_OUTREACH_STATUSES);
+const CLOSED_OUTREACH_SQL = outreachSqlList(CLOSED_OUTREACH_STATUSES);
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -262,7 +262,7 @@ export default {
       if (outreachChannelMatch && request.method === "POST") {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
-        return logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
+        return await logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
       }
 
       if (sponsorScanMatch && request.method === "POST") {
@@ -409,7 +409,10 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
     return json({
       channels: results.map((row) => ({
         ...row,
+        is_seed: row.is_seed === 1,
         seed_locked: row.seed_locked === 1,
+        is_active: row.is_active === 1,
+        outreach_status: row.outreach_stage,
         ...growthFields(growth.get(row.channel_id)),
         ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
         query_phrases: queryPhrases.get(row.channel_id) ?? [],
@@ -433,7 +436,10 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
   return json({
     channels: results.map((row) => ({
       ...row,
+      is_seed: row.is_seed === 1,
       seed_locked: row.seed_locked === 1,
+      is_active: row.is_active === 1,
+      outreach_status: row.outreach_stage,
       ...growthFields(growth.get(row.channel_id)),
       ...sponsorRollupFields(sponsorRollups.get(row.channel_id)),
     })),
@@ -738,6 +744,7 @@ async function patchChannel(
     kind?: unknown;
     status?: unknown;
     is_seed?: unknown;
+    is_active?: unknown;
     email_confirmed?: unknown;
     snoozed_until?: unknown;
     snooze_reason?: unknown;
@@ -796,6 +803,14 @@ async function patchChannel(
     }
     updates.push("is_seed = ?");
     bindings.push(body.is_seed ? 1 : 0);
+  }
+
+  if (body.is_active !== undefined) {
+    if (typeof body.is_active !== "boolean") {
+      return json({ error: "is_active must be boolean" }, 400);
+    }
+    updates.push("is_active = ?");
+    bindings.push(body.is_active ? 1 : 0);
   }
 
   if (body.email_confirmed !== undefined) {
@@ -868,12 +883,7 @@ async function logOutreach(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const existing = await env.SCOUT_DB.prepare(
-    "SELECT * FROM channels WHERE channel_id = ?",
-  )
-    .bind(channelId)
-    .first<ChannelRow>();
-  if (!existing) return json({ error: "Channel not found" }, 404);
+  const existing = await requireMutableChannel(env, channelId);
 
   const body = await parseJson<{
     outreach_status?: unknown;
@@ -909,7 +919,7 @@ async function logOutreach(
   await env.SCOUT_DB.batch([
     env.SCOUT_DB.prepare(
       `UPDATE channels
-      SET outreach_status = ?,
+      SET outreach_stage = ?,
         contacted_at = ${contactedExpression},
         last_touch_at = CURRENT_TIMESTAMP,
         next_followup_at = ?,
@@ -1351,7 +1361,7 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       AND (? IS NULL OR c.subscriber_count >= ?)
       AND (? IS NULL OR c.subscriber_count <= ?)
       AND (? IS NULL OR c.discovered_via = ?)
-      AND (? IS NULL OR c.outreach_status = ?)
+      AND (? IS NULL OR c.outreach_stage = ?)
     ORDER BY ${orderBy}
     LIMIT ?`,
   )
@@ -1380,31 +1390,37 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
 }
 
 async function outreach(env: Env): Promise<Response> {
-  const active = await outreachRows(env, false);
-  const closed = await outreachRows(env, true);
+  const working = await outreachRows(env, "working");
+  const live = await outreachRows(env, "live");
+  const closed = await outreachRows(env, "closed");
   const growth = await growthMapForChannels(
     env,
-    [...active, ...closed].map((row) => row.channel_id),
+    [...working, ...live, ...closed].map((row) => row.channel_id),
   );
 
   return json({
-    active: active.map((row) => channelSummary(row, growth.get(row.channel_id))),
+    working: working.map((row) => channelSummary(row, growth.get(row.channel_id))),
+    live: live.map((row) => channelSummary(row, growth.get(row.channel_id))),
     closed: closed.map((row) => channelSummary(row, growth.get(row.channel_id))),
   });
 }
 
 async function outreachRows(
   env: Env,
-  closed: boolean,
+  route: "working" | "live" | "closed",
 ): Promise<Array<ChannelRow & { source_seed_title: string | null }>> {
-  const clause = closed
-    ? "c.outreach_status IN ('signed', 'passed', 'ghosted')"
-    : "c.outreach_status IN ('sent', 'replied', 'in_talks')";
-  const order = closed
-    ? "c.last_touch_at DESC, c.updated_at DESC"
-    : `CASE WHEN c.last_touch_at IS NULL THEN 1 ELSE 0 END,
-      c.last_touch_at ASC,
-      c.updated_at ASC`;
+  const clause = route === "working"
+    ? "c.is_active = 1"
+    : route === "closed"
+      ? `c.outreach_stage IN (${CLOSED_OUTREACH_SQL})`
+      : `c.outreach_stage IN (${LIVE_OUTREACH_SQL})`;
+  const order = route === "working"
+    ? "LOWER(COALESCE(c.title, c.handle, c.channel_id)) ASC"
+    : route === "closed"
+      ? "c.last_touch_at DESC, c.updated_at DESC"
+      : `CASE WHEN c.last_touch_at IS NULL THEN 1 ELSE 0 END,
+        c.last_touch_at ASC,
+        c.updated_at ASC`;
   const { results } = await env.SCOUT_DB.prepare(
     `WITH latest_scans AS (
       SELECT channel_id, MAX(scanned_at) AS scanned_at
@@ -1515,6 +1531,7 @@ async function brands(env: Env): Promise<Response> {
         channel_id: row.channel_id,
         handle: row.handle,
         title: row.title,
+        is_active: row.is_active === 1,
         subscriber_count: row.subscriber_count,
         country: row.country,
         links: extractLinks(raw),
@@ -2913,7 +2930,7 @@ async function status(env: Env): Promise<Response> {
     "SELECT value, updated_at FROM meta WHERE key = 'credits_remaining'",
   ).first<{ value: string | null; updated_at: string }>();
   const byStatus = await env.SCOUT_DB.prepare(
-    "SELECT status, COUNT(*) AS count FROM channels GROUP BY status",
+    "SELECT status, COUNT(*) AS count FROM channels WHERE outreach_stage = 'none' AND is_active = 0 GROUP BY status",
   ).all<{ status: string; count: number }>();
   const byKind = await env.SCOUT_DB.prepare(
     "SELECT kind, COUNT(*) AS count FROM channels GROUP BY kind",
@@ -2922,16 +2939,24 @@ async function status(env: Env): Promise<Response> {
     "SELECT COUNT(*) AS count FROM channels WHERE is_seed = 1",
   ).first<{ count: number }>();
   const poolCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE status = 'candidate' AND is_seed = 0 AND kind = 'creator'",
+    "SELECT COUNT(*) AS count FROM channels WHERE status = 'candidate' AND is_seed = 0 AND kind = 'creator' AND outreach_stage = 'none' AND is_active = 0",
   ).first<{ count: number }>();
   const shortlistCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE status = 'shortlisted' AND outreach_status = 'none'",
+    "SELECT COUNT(*) AS count FROM channels WHERE status = 'shortlisted' AND outreach_stage = 'none' AND is_active = 0",
   ).first<{ count: number }>();
-  const outreachActiveCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('sent', 'replied', 'in_talks')",
+  const outreachLiveCount = await env.SCOUT_DB.prepare(
+    `SELECT COUNT(*) AS count FROM channels WHERE outreach_stage IN (${LIVE_OUTREACH_SQL})`,
   ).first<{ count: number }>();
   const outreachClosedCount = await env.SCOUT_DB.prepare(
-    "SELECT COUNT(*) AS count FROM channels WHERE outreach_status IN ('signed', 'passed', 'ghosted')",
+    `SELECT COUNT(*) AS count FROM channels WHERE outreach_stage IN (${CLOSED_OUTREACH_SQL})`,
+  ).first<{ count: number }>();
+  const activeRelationshipCount = await env.SCOUT_DB.prepare(
+    "SELECT COUNT(*) AS count FROM channels WHERE is_active = 1",
+  ).first<{ count: number }>();
+  const outreachTotalCount = await env.SCOUT_DB.prepare(
+    `SELECT COUNT(*) AS count FROM channels
+    WHERE is_active = 1
+      OR outreach_stage IN (${LIVE_OUTREACH_SQL})`,
   ).first<{ count: number }>();
   const lastSearch = await env.SCOUT_DB.prepare(
     `SELECT id, query, pages_used, refs_found, resolved, credits_spent, created_at
@@ -2961,8 +2986,10 @@ async function status(env: Env): Promise<Response> {
       pool: Number(poolCount?.count ?? 0),
       shortlist: Number(shortlistCount?.count ?? 0),
       seeds: Number(seedCount?.count ?? 0),
-      outreach_active: Number(outreachActiveCount?.count ?? 0),
+      outreach_live: Number(outreachLiveCount?.count ?? 0),
       outreach_closed: Number(outreachClosedCount?.count ?? 0),
+      active_relationships: Number(activeRelationshipCount?.count ?? 0),
+      outreach_total: Number(outreachTotalCount?.count ?? 0),
     },
     last_search: lastSearch ?? null,
     last_snapshot_run: lastSnapshotRun ?? null,
@@ -3170,11 +3197,13 @@ interface ChannelRow {
   thumbnail_url: string | null;
   is_seed: number;
   seed_locked: number;
+  is_active: number;
   discovered_via: string;
   source_channel_id: string | null;
   search_query: string | null;
   status: ChannelStatus;
-  outreach_status: OutreachStatus;
+  outreach_status: string;
+  outreach_stage: OutreachStatus;
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
@@ -3653,9 +3682,17 @@ async function upsertChannel(
 }
 
 async function getChannel(env: Env, channelId: string): Promise<unknown> {
-  return env.SCOUT_DB.prepare("SELECT * FROM channels WHERE channel_id = ?")
+  const row = await env.SCOUT_DB.prepare("SELECT * FROM channels WHERE channel_id = ?")
     .bind(channelId)
-    .first();
+    .first<ChannelRow>();
+  if (!row) return null;
+  return {
+    ...row,
+    is_seed: row.is_seed === 1,
+    seed_locked: row.seed_locked === 1,
+    is_active: row.is_active === 1,
+    outreach_status: row.outreach_stage,
+  };
 }
 
 async function upsertVideos(
@@ -3890,6 +3927,7 @@ function channelSummary(
     thumbnail_url: row.thumbnail_url,
     is_seed: row.is_seed === 1,
     seed_locked: row.seed_locked === 1,
+    is_active: row.is_active === 1,
     subscriber_count: row.subscriber_count,
     score: row.score,
     score_breakdown: parseScoreBreakdown(row.score_breakdown),
@@ -3897,7 +3935,7 @@ function channelSummary(
     kind_reason: row.kind_reason,
     discovered_via: row.discovered_via,
     status: row.status,
-    outreach_status: row.outreach_status ?? "none",
+    outreach_status: row.outreach_stage ?? "none",
     contacted_at: row.contacted_at ?? null,
     last_touch_at: row.last_touch_at ?? null,
     next_followup_at: row.next_followup_at ?? null,

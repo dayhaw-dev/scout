@@ -55,7 +55,7 @@ const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
 const KIND_OPTIONS: ChannelKind[] = ["creator", "brand"];
 const ALL_KIND_OPTIONS: ChannelKind[] = ["creator", "brand", "alt"];
 const TABS: Tab[] = ["pool", "shortlist", "outreach", "watchlist", "snoozed", "seeds", "rejected", "brands"];
-const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "signed", "passed", "ghosted"];
+const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "pitched", "signed", "passed"];
 
 export function App() {
   const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SESSION_KEY));
@@ -440,7 +440,6 @@ function StageView({
         kind: showPoolFilters ? kinds.join(",") : ALL_KIND_OPTIONS.join(","),
         discovered_via: showPoolFilters && source !== "all" ? source : null,
         status: stageStatus,
-        outreach_status: stage === "shortlist" ? "none" : null,
         is_seed: stage === "pool" ? 0 : null,
         include_unscored: stage === "pool" ? 0 : 1,
         limit: 100,
@@ -641,6 +640,20 @@ function StageView({
       onChanged();
       onToast({
         message: `${channel.title ?? "Channel"} business email ${nextConfirmed ? "confirmed" : "unmarked"}.`,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function toggleActive(channel: ChannelCardRow) {
+    const nextActive = !channel.is_active;
+    try {
+      await api.patchChannel(channel.channel_id, { is_active: nextActive });
+      await load();
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"} ${nextActive ? "marked ACTIVE / WORKING WITH" : "removed from ACTIVE"}.`,
       });
     } catch (error) {
       onError(error);
@@ -1109,6 +1122,7 @@ function StageView({
               snoozedCount={status?.channel_counts.by_status.snoozed ?? 0}
               onToggleKind={stage !== "rejected" && stage !== "snoozed" ? () => void toggleKind(channel) : undefined}
               onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
+              onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
               onEnrich={stage !== "rejected" && stage !== "snoozed" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
               onSponsorScan={stage !== "rejected" && stage !== "snoozed" ? () => void scanSponsors(channel) : undefined}
@@ -1153,7 +1167,8 @@ function OutreachView({
   onToast: (toast: ToastState) => void;
   onChanged: () => void;
 }) {
-  const [active, setActive] = useState<ChannelCardRow[]>([]);
+  const [working, setWorking] = useState<ChannelCardRow[]>([]);
+  const [live, setLive] = useState<ChannelCardRow[]>([]);
   const [closed, setClosed] = useState<ChannelCardRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
@@ -1165,7 +1180,8 @@ function OutreachView({
     setLoading(true);
     try {
       const result = await api.getOutreach();
-      setActive(result.active);
+      setWorking(result.working);
+      setLive(result.live);
       setClosed(result.closed);
     } catch (error) {
       onError(error);
@@ -1177,17 +1193,6 @@ function OutreachView({
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function patchStatus(channel: ChannelCardRow, status: ChannelStatus, message: string) {
-    try {
-      await api.patchChannel(channel.channel_id, { status });
-      await load();
-      onChanged();
-      onToast({ message });
-    } catch (error) {
-      onError(error);
-    }
-  }
 
   async function toggleSeed(channel: ChannelCardRow) {
     const nextSeedState = !channel.is_seed;
@@ -1209,6 +1214,20 @@ function OutreachView({
       onChanged();
       onToast({
         message: `${channel.title ?? "Channel"} business email ${nextConfirmed ? "confirmed" : "unmarked"}.`,
+      });
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function toggleActive(channel: ChannelCardRow) {
+    const nextActive = !channel.is_active;
+    try {
+      await api.patchChannel(channel.channel_id, { is_active: nextActive });
+      await load();
+      onChanged();
+      onToast({
+        message: `${channel.title ?? "Channel"} ${nextActive ? "marked ACTIVE / WORKING WITH" : "removed from ACTIVE"}.`,
       });
     } catch (error) {
       onError(error);
@@ -1274,27 +1293,25 @@ function OutreachView({
   return (
     <section className="view">
       <div className="stage-heading clipped">
-        <strong>Outreach</strong>
-        <span>Live conversations sorted by the stalest touch first.</span>
+        <strong>Active / working with</strong>
+        <span>Current brand relationships, independent of outreach funnel status.</span>
       </div>
-      {loading ? <Loading /> : active.length === 0 ? (
-        <EmptyState title="No active outreach" detail="Log outreach from a Shortlist card to start follow-up tracking." />
+      {loading ? <Loading /> : working.length === 0 ? (
+        <EmptyState title="No active relationships" detail="Mark a creator ACTIVE from any prospect or outreach card." />
       ) : (
         <div className="card-grid">
-          {active.map((channel) => (
+          {working.map((channel) => (
             <ChannelCard
               key={channel.channel_id}
               channel={channel}
               showStatus
               stale={isStaleOutreach(channel)}
-              onLogOutreach={() => setOutreachChannel(channel)}
-              onShortlist={channel.status !== "shortlisted" ? () => void patchStatus(channel, "shortlisted", `${channel.title ?? "Channel"} shortlisted.`) : undefined}
-              onReject={() => void patchStatus(channel, "rejected", `${channel.title ?? "Channel"} rejected.`)}
-              onBackToPool={channel.status !== "candidate" ? () => void patchStatus(channel, "candidate", `${channel.title ?? "Channel"} returned to Pool.`) : undefined}
-              onToggleSeed={() => void toggleSeed(channel)}
-              onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
-              onEnrich={() => void enrichCard(channel)}
-              onSponsorScan={() => void scanSponsors(channel)}
+              onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
+              onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+              onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
+              onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
+              onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+              onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
               sponsorScan={sponsorScans[channel.channel_id]}
               sponsorScanLoading={scanningSponsorId === channel.channel_id}
               tab="outreach"
@@ -1302,10 +1319,37 @@ function OutreachView({
           ))}
         </div>
       )}
+      <div className="stage-heading clipped outreach-live-heading">
+        <strong>Live</strong>
+        <span>SENT, REPLIED, IN TALKS, and PITCHED — stalest touch first.</span>
+      </div>
+      {!loading && (live.length === 0 ? (
+        <EmptyState title="No live outreach" detail="Log outreach from a Shortlist card to start follow-up tracking." />
+      ) : (
+        <div className="card-grid">
+          {live.map((channel) => (
+            <ChannelCard
+              key={channel.channel_id}
+              channel={channel}
+              showStatus
+              stale={isStaleOutreach(channel)}
+              onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
+              onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+              onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
+              onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
+              onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+              onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
+              sponsorScan={sponsorScans[channel.channel_id]}
+              sponsorScanLoading={scanningSponsorId === channel.channel_id}
+              tab="outreach"
+            />
+          ))}
+        </div>
+      ))}
       <details className="closed-section clipped">
         <summary>Closed ({closed.length})</summary>
         {closed.length === 0 ? (
-          <EmptyState title="No closed outreach" detail="Signed, passed, and ghosted channels will collect here." />
+          <EmptyState title="No closed outreach" detail="SIGNED and PASSED channels will collect here." />
         ) : (
           <div className="card-grid">
             {closed.map((channel) => (
@@ -1313,11 +1357,12 @@ function OutreachView({
                 key={channel.channel_id}
                 channel={channel}
                 showStatus
-                onLogOutreach={() => setOutreachChannel(channel)}
-                onToggleSeed={channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
-                onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
-                onEnrich={() => void enrichCard(channel)}
-                onSponsorScan={() => void scanSponsors(channel)}
+                onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
+                onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+                onToggleSeed={!channel.seed_locked && channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
+                onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
+                onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+                onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
                 sponsorScan={sponsorScans[channel.channel_id]}
                 sponsorScanLoading={scanningSponsorId === channel.channel_id}
                 tab="outreach"
@@ -1457,6 +1502,22 @@ function SeedsView({
     } catch (error) {
       onError(error);
       await load();
+    }
+  }
+
+  async function toggleSeedActive(seed: RawChannelRow) {
+    const nextActive = !seed.is_active;
+    try {
+      await api.patchChannel(seed.channel_id, { is_active: nextActive });
+      setSeeds((rows) => rows.map((row) => (
+        row.channel_id === seed.channel_id ? { ...row, is_active: nextActive } : row
+      )));
+      onChanged();
+      onToast({
+        message: `${seed.title ?? "Seed"} ${nextActive ? "marked ACTIVE / WORKING WITH" : "removed from ACTIVE"}.`,
+      });
+    } catch (error) {
+      onError(error);
     }
   }
 
@@ -1662,6 +1723,7 @@ function SeedsView({
               onExpand={() => setDialogSeed(seed)}
               onSnapshot={() => void snapshotSeed(seed)}
               onUnseed={() => void unseed(seed)}
+              onToggleActive={() => void toggleSeedActive(seed)}
               onQuery={onQuery}
               onDismissQuery={(term) => void dismissSeedQuery(term)}
               searchedTerms={searchedTerms}
@@ -1970,6 +2032,7 @@ function BrandCard({
       )}
       <div className="status-chip-row">
         <span className="chip kind-brand">brand</span>
+        {brand.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
       </div>
       {brand.source_seed_title && (
         <div className="provenance-line">seed: {brand.source_seed_title}</div>
@@ -2006,6 +2069,7 @@ function ChannelCard({
   snoozedCount = 0,
   onToggleKind,
   onToggleEmailConfirmed,
+  onToggleActive,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -2029,6 +2093,7 @@ function ChannelCard({
   snoozedCount?: number;
   onToggleKind?: () => void;
   onToggleEmailConfirmed?: () => void;
+  onToggleActive?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -2054,6 +2119,7 @@ function ChannelCard({
     onSnooze: onSnooze ? () => setSnoozeOpen((value) => !value) : undefined,
     onToggleKind,
     onToggleEmailConfirmed,
+    onToggleActive,
     onEnrich,
     onLogOutreach,
     onSponsorScan,
@@ -2122,6 +2188,7 @@ function ChannelCard({
         {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
         {stale && <span className="chip stale-chip">STALE</span>}
         {channel.woke_at && channel.status === "candidate" && <span className="chip woke-chip">WOKE</span>}
+        {channel.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
         {channel.outreach_status && channel.outreach_status !== "none" && (
           <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
         )}
@@ -2392,6 +2459,7 @@ function cardActions({
   onSnooze,
   onToggleKind,
   onToggleEmailConfirmed,
+  onToggleActive,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -2410,6 +2478,7 @@ function cardActions({
   onSnooze?: () => void;
   onToggleKind?: () => void;
   onToggleEmailConfirmed?: () => void;
+  onToggleActive?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -2430,7 +2499,8 @@ function cardActions({
       tab === "outreach" &&
       (channel.outreach_status === "sent" ||
         channel.outreach_status === "replied" ||
-        channel.outreach_status === "in_talks");
+        channel.outreach_status === "in_talks" ||
+        channel.outreach_status === "pitched");
     actions.push({
       key: "outreach",
       label: updateOutreach ? "Update status" : "Log outreach",
@@ -2474,6 +2544,14 @@ function cardActions({
       title: channel.email_confirmed
         ? "Remove the manual business-email confirmation"
         : "Manually confirm that YouTube shows a business-email button",
+    });
+  }
+  if (onToggleActive) {
+    actions.push({
+      key: "active-relationship",
+      label: channel.is_active ? "Stop working with" : "Mark ACTIVE / working with",
+      onClick: onToggleActive,
+      className: channel.is_active ? "active-action" : undefined,
     });
   }
   if (onEnrich) {
@@ -2642,11 +2720,12 @@ function OutreachDialog({
   );
   const [note, setNote] = useState(channel.latest_outreach_note ?? "");
   const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : "");
-  const closed = outreachStatus === "signed" || outreachStatus === "passed" || outreachStatus === "ghosted";
+  const closed = outreachStatus === "signed" || outreachStatus === "passed";
   const updating =
     channel.outreach_status === "sent" ||
     channel.outreach_status === "replied" ||
-    channel.outreach_status === "in_talks";
+    channel.outreach_status === "in_talks" ||
+    channel.outreach_status === "pitched";
 
   useEffect(() => {
     if (closed) setNextFollowup("");
@@ -2854,6 +2933,7 @@ function SeedCard({
   onExpand,
   onSnapshot,
   onUnseed,
+  onToggleActive,
   onQuery,
   onDismissQuery,
   searchedTerms,
@@ -2862,6 +2942,7 @@ function SeedCard({
   onExpand: () => void;
   onSnapshot: () => void;
   onUnseed: () => void;
+  onToggleActive: () => void;
   onQuery: (query: string) => void;
   onDismissQuery: (query: string) => void;
   searchedTerms: Set<string>;
@@ -2888,6 +2969,7 @@ function SeedCard({
         <span className="chip status-chip">{seed.status}</span>
         <span className="chip">seed</span>
         <span className="chip">YIELD: {seed.yield_count ?? 0}</span>
+        {seed.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
         {seed.seed_locked && <span className="chip locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
         <SeedFreshnessChip freshness={seed.mining_freshness ?? null} />
       </div>
@@ -2934,6 +3016,9 @@ function SeedCard({
       <div className="card-actions">
         <button onClick={onExpand} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be expanded" : undefined}>Expand</button>
         <button onClick={onSnapshot}>Snapshot</button>
+        <button onClick={onToggleActive} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be modified" : undefined}>
+          {seed.is_active ? "Stop working with" : "Mark ACTIVE"}
+        </button>
         <button onClick={onUnseed} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be unseeded" : undefined}>Unseed</button>
       </div>
     </article>
@@ -3767,7 +3852,7 @@ function tabCount(tab: Tab, status: StatusPayload | null): number | null {
   if (!status) return null;
   if (tab === "pool") return status.channel_counts.pool ?? 0;
   if (tab === "shortlist") return status.channel_counts.shortlist ?? 0;
-  if (tab === "outreach") return status.channel_counts.outreach_active ?? 0;
+  if (tab === "outreach") return status.channel_counts.outreach_total ?? 0;
   if (tab === "watchlist") return status.channel_counts.by_status.watchlist ?? 0;
   if (tab === "snoozed") return status.channel_counts.by_status.snoozed ?? 0;
   if (tab === "seeds") return status.channel_counts.seeds ?? 0;
@@ -4117,7 +4202,7 @@ function daysAgo(value: string): number {
 }
 
 function isStaleOutreach(channel: ChannelCardRow): boolean {
-  if (channel.outreach_status !== "sent" && channel.outreach_status !== "ghosted") return false;
+  if (channel.outreach_status !== "sent") return false;
   return daysAgo(channel.last_touch_at ?? "") > 14;
 }
 

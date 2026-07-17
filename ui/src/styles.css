@@ -957,6 +957,85 @@ a:hover {
   color: #fecaca;
 }
 
+.woke-chip {
+  border-color: rgba(103, 232, 249, 0.62);
+  color: #bff6ff;
+  background: rgba(8, 47, 73, 0.5);
+}
+
+.snooze-context {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border-left: 2px solid rgba(34, 211, 238, 0.58);
+  background: rgba(7, 17, 31, 0.58);
+}
+
+.snooze-context strong {
+  color: #e6f7fb;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.snooze-context span {
+  color: #7f9fad;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.snooze-context.woken {
+  border-left-color: rgba(143, 180, 196, 0.34);
+}
+
+.snooze-editor {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid rgba(34, 211, 238, 0.32);
+  background: #0a1626;
+}
+
+.snooze-editor label {
+  display: grid;
+  gap: 5px;
+  color: #8fb4c4;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.snooze-duration {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.snooze-duration button {
+  min-width: 0;
+  padding: 7px 4px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snooze-duration button.active {
+  color: #07111f;
+  border-color: #22d3ee;
+  background: #22d3ee;
+}
+
+.snooze-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.snooze-cap-warning {
+  color: #fbbf24;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
 .channel-card.stale-card {
   border-color: rgba(248, 113, 113, 0.58);
   box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.12);
@@ -1069,6 +1148,7 @@ a:hover {
   font-size: 12px;
   clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
 }
+
 
 .brand-link-row {
   display: flex;
@@ -1786,6 +1866,10 @@ a:hover {
 
   .channel-card {
     min-height: 0;
+  }
+
+  .snooze-duration {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .discovery-console {

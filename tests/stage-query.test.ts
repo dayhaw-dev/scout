@@ -15,6 +15,10 @@ test("shortlist stage clause filters each pipeline status exactly", () => {
   assert.equal(watchlist.sql, "(c.status = ?)");
   assert.deepEqual(watchlist.bindings, ["watchlist"]);
 
+  const snoozed = shortlistStageClause("snoozed", null);
+  assert.equal(snoozed.sql, "(c.status = ?)");
+  assert.deepEqual(snoozed.bindings, ["snoozed"]);
+
   const rejected = shortlistStageClause("rejected", null);
   assert.equal(rejected.sql, "(c.status = ?)");
   assert.deepEqual(rejected.bindings, ["rejected"]);
@@ -32,7 +36,7 @@ test("shortlist stage clause supports pool and seed stage queries", () => {
 
 test("shortlist default excludes rejected while all leaves status unrestricted", () => {
   const defaultClause = shortlistStageClause(null, null);
-  assert.equal(defaultClause.sql, "(c.status IN ('candidate', 'shortlisted', 'watchlist'))");
+  assert.equal(defaultClause.sql, "(c.status IN ('candidate', 'shortlisted', 'watchlist', 'snoozed'))");
   assert.deepEqual(defaultClause.bindings, []);
 
   const all = shortlistStageClause("all", null);

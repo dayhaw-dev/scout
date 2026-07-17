@@ -21,9 +21,9 @@ import {
 import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, MOVER_CONFIG, REACH_CONFIG } from "./config";
 
-type StageTab = "pool" | "shortlist" | "watchlist" | "rejected";
+type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
-type SortMode = "score" | "growth" | "subs_desc" | "subs_asc";
+type SortMode = "score" | "growth" | "wake" | "subs_desc" | "subs_asc";
 type GateState = "idle" | "checking" | "denied" | "success" | "cooldown";
 type ToastState = {
   message: string;
@@ -43,12 +43,13 @@ type SponsorScanTarget = {
   channel: ChannelCardRow;
   summary: SponsorScanSummary;
 };
+type SnoozeInput = { snoozed_until: string; snooze_reason: string };
 
 const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
 const KIND_OPTIONS: ChannelKind[] = ["creator", "brand"];
 const ALL_KIND_OPTIONS: ChannelKind[] = ["creator", "brand", "alt"];
-const TABS: Tab[] = ["pool", "shortlist", "outreach", "watchlist", "seeds", "rejected", "brands"];
+const TABS: Tab[] = ["pool", "shortlist", "outreach", "watchlist", "snoozed", "seeds", "rejected", "brands"];
 const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "signed", "passed", "ghosted"];
 
 export function App() {
@@ -177,7 +178,7 @@ export function App() {
       )}
 
       <main>
-        {adminKey && (tab === "pool" || tab === "shortlist" || tab === "watchlist" || tab === "rejected") && (
+        {adminKey && (tab === "pool" || tab === "shortlist" || tab === "watchlist" || tab === "snoozed" || tab === "rejected") && (
           <StageView
             stage={tab}
             api={api}
@@ -424,7 +425,9 @@ function StageView({
             ? "shortlisted"
             : stage === "watchlist"
               ? "watchlist"
-              : "rejected";
+              : stage === "snoozed"
+                ? "snoozed"
+                : "rejected";
       const result = await api.getShortlist({
         min_score: showPoolFilters ? minScore : 0,
         min_subs: showPoolFilters ? minSubs : null,
@@ -519,7 +522,7 @@ function StageView({
             (channel.title ?? "").toLowerCase().includes(titleFilter.toLowerCase()),
           )
         : channels,
-      stage === "watchlist" ? "growth" : showPoolFilters ? sort : "score",
+      stage === "watchlist" ? "growth" : stage === "snoozed" ? "wake" : showPoolFilters ? sort : "score",
     );
 
     if (!showPoolFilters || newArrivalIds.size === 0) return sorted;
@@ -538,12 +541,47 @@ function StageView({
         message: `${channel.title ?? "Channel"} marked ${messageStatus}.`,
         actionLabel: "Undo",
         onAction: () => {
-          void api.patchChannel(channel.channel_id, { status: previousStatus })
+          const undoBody = previousStatus === "snoozed"
+            ? {
+                status: previousStatus,
+                snoozed_until: channel.snoozed_until ?? "",
+                snooze_reason: channel.snooze_reason ?? "",
+              }
+            : { status: previousStatus };
+          void api.patchChannel(channel.channel_id, undoBody)
             .then(load)
             .then(onChanged)
             .catch(onError);
         },
       });
+    } catch (error) {
+      onError(error);
+      await load();
+    }
+  }
+
+  async function saveSnooze(channel: ChannelCardRow, input: SnoozeInput) {
+    try {
+      await api.patchChannel(channel.channel_id, {
+        status: "snoozed",
+        snoozed_until: input.snoozed_until,
+        snooze_reason: input.snooze_reason,
+      });
+      await load();
+      onChanged();
+      onToast({ message: `${channel.title ?? "Channel"} snoozed until ${shortDate(input.snoozed_until)}.` });
+    } catch (error) {
+      onError(error);
+      throw error;
+    }
+  }
+
+  async function wakeChannel(channel: ChannelCardRow) {
+    setChannels((rows) => rows.filter((row) => row.channel_id !== channel.channel_id));
+    try {
+      await api.patchChannel(channel.channel_id, { status: "candidate" });
+      onChanged();
+      onToast({ message: `${channel.title ?? "Channel"} woke and returned to Pool.` });
     } catch (error) {
       onError(error);
       await load();
@@ -589,6 +627,7 @@ function StageView({
       await load();
     }
   }
+
 
   async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
     if (!outreachChannel) return;
@@ -1043,14 +1082,17 @@ function StageView({
               showStatus={stage !== "pool"}
               onShortlist={stage === "pool" || stage === "watchlist" ? () => void patchStatus(channel, "shortlisted") : undefined}
               onReject={stage !== "rejected" ? () => void patchStatus(channel, "rejected") : undefined}
-              onToggleSeed={stage !== "rejected" ? () => void toggleSeed(channel) : undefined}
+              onToggleSeed={stage !== "rejected" && stage !== "snoozed" ? () => void toggleSeed(channel) : undefined}
               onWatchlist={stage === "pool" || stage === "shortlist" ? () => void patchStatus(channel, "watchlist", "watchlist") : undefined}
               onBackToPool={stage === "shortlist" || stage === "watchlist" ? () => void patchStatus(channel, "candidate", "candidate") : undefined}
               onRestoreToPool={stage === "rejected" ? () => void patchStatus(channel, "candidate", "candidate") : undefined}
-              onToggleKind={stage !== "rejected" ? () => void toggleKind(channel) : undefined}
-              onEnrich={stage !== "rejected" ? () => void enrichCard(channel) : undefined}
+              onWake={stage === "snoozed" ? () => void wakeChannel(channel) : undefined}
+              onSnooze={stage === "pool" || stage === "watchlist" || stage === "snoozed" ? (input) => saveSnooze(channel, input) : undefined}
+              snoozedCount={status?.channel_counts.by_status.snoozed ?? 0}
+              onToggleKind={stage !== "rejected" && stage !== "snoozed" ? () => void toggleKind(channel) : undefined}
+              onEnrich={stage !== "rejected" && stage !== "snoozed" ? () => void enrichCard(channel) : undefined}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
-              onSponsorScan={stage !== "rejected" ? () => void scanSponsors(channel) : undefined}
+              onSponsorScan={stage !== "rejected" && stage !== "snoozed" ? () => void scanSponsors(channel) : undefined}
               sponsorScan={sponsorScans[channel.channel_id]}
               sponsorScanLoading={scanningSponsorId === channel.channel_id}
               tab={stage}
@@ -1139,6 +1181,7 @@ function OutreachView({
       onError(error);
     }
   }
+
 
   async function enrichCard(channel: ChannelCardRow) {
     try {
@@ -1807,6 +1850,9 @@ function ChannelCard({
   onWatchlist,
   onBackToPool,
   onRestoreToPool,
+  onWake,
+  onSnooze,
+  snoozedCount = 0,
   onToggleKind,
   onEnrich,
   onLogOutreach,
@@ -1826,6 +1872,9 @@ function ChannelCard({
   onWatchlist?: () => void;
   onBackToPool?: () => void;
   onRestoreToPool?: () => void;
+  onWake?: () => void;
+  onSnooze?: (input: SnoozeInput) => Promise<void>;
+  snoozedCount?: number;
   onToggleKind?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
@@ -1838,6 +1887,7 @@ function ChannelCard({
   stale?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actions = cardActions({
     channel,
     tab,
@@ -1847,6 +1897,8 @@ function ChannelCard({
     onWatchlist,
     onBackToPool,
     onRestoreToPool,
+    onWake,
+    onSnooze: onSnooze ? () => setSnoozeOpen((value) => !value) : undefined,
     onToggleKind,
     onEnrich,
     onLogOutreach,
@@ -1914,6 +1966,7 @@ function ChannelCard({
         {newArrival && <span className="chip new-chip">NEW</span>}
         {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
         {stale && <span className="chip stale-chip">STALE</span>}
+        {channel.woke_at && channel.status === "candidate" && <span className="chip woke-chip">WOKE</span>}
         {channel.outreach_status && channel.outreach_status !== "none" && (
           <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
         )}
@@ -1922,6 +1975,17 @@ function ChannelCard({
       {provenanceItems.length > 0 && (
         <div className="provenance-line">
           {provenanceItems.join(" / ")}
+        </div>
+      )}
+      {channel.snooze_reason && (channel.status === "snoozed" || Boolean(channel.woke_at)) && (
+        <div className={`snooze-context ${channel.status === "snoozed" ? "active" : "woken"}`}>
+          <strong>{channel.snooze_reason}</strong>
+          {channel.status === "snoozed" && (
+            <span>
+              Snoozed {channel.snoozed_at ? shortDate(channel.snoozed_at) : "--"}
+              {channel.snoozed_until ? ` / wakes ${shortDate(channel.snoozed_until)}` : ""}
+            </span>
+          )}
         </div>
       )}
       <Sparkline points={channel.snapshots ?? []} />
@@ -1934,6 +1998,17 @@ function ChannelCard({
         </div>
       )}
       {open && <ScoreTable breakdown={channel.score_breakdown} />}
+      {snoozeOpen && onSnooze && (
+        <SnoozeEditor
+          channel={channel}
+          snoozedCount={snoozedCount}
+          onCancel={() => setSnoozeOpen(false)}
+          onSubmit={async (input) => {
+            await onSnooze(input);
+            setSnoozeOpen(false);
+          }}
+        />
+      )}
       {actions.length > 0 && (
         <div className="card-actions">
           {primaryAction && (
@@ -1952,6 +2027,88 @@ function ChannelCard({
         </div>
       )}
     </article>
+  );
+}
+
+function SnoozeEditor({
+  channel,
+  snoozedCount,
+  onSubmit,
+  onCancel,
+}: {
+  channel: ChannelCardRow;
+  snoozedCount: number;
+  onSubmit: (input: SnoozeInput) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const editing = channel.status === "snoozed";
+  const [duration, setDuration] = useState<"1" | "3" | "6" | "custom">(editing ? "custom" : "3");
+  const [customDate, setCustomDate] = useState(channel.snoozed_until ? dateInputValue(channel.snoozed_until) : "");
+  const [reason, setReason] = useState(channel.snooze_reason ?? "");
+  const [saving, setSaving] = useState(false);
+  const valid = reason.trim().length > 0 && (duration !== "custom" || Boolean(customDate));
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      await onSubmit({
+        snoozed_until: snoozeUntil(duration, customDate),
+        snooze_reason: reason.trim(),
+      });
+    } catch {
+      return;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="snooze-editor clipped" onSubmit={(event) => void submit(event)}>
+      {!editing && snoozedCount >= 15 && (
+        <div className="snooze-cap-warning">{snoozedCount} snoozed - wake or reject something</div>
+      )}
+      <div className="snooze-duration" role="group" aria-label="Snooze duration">
+        {(["1", "3", "6", "custom"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={duration === option ? "active" : ""}
+            onClick={() => setDuration(option)}
+          >
+            {option === "custom" ? "CUSTOM" : `${option} MONTH${option === "1" ? "" : "S"}`}
+          </button>
+        ))}
+      </div>
+      {duration === "custom" && (
+        <label>
+          Wake date
+          <input
+            type="date"
+            min={dateInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())}
+            value={customDate}
+            onChange={(event) => setCustomDate(event.target.value)}
+          />
+        </label>
+      )}
+      <label>
+        Why snooze?
+        <input
+          value={reason}
+          maxLength={240}
+          placeholder="e.g. B2B infra, no matching brand yet"
+          onChange={(event) => setReason(event.target.value)}
+          autoFocus
+        />
+      </label>
+      <div className="snooze-editor-actions">
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="primary-action" disabled={!valid || saving}>
+          {saving ? "Saving..." : editing ? "Save" : "Snooze"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -2076,6 +2233,8 @@ function cardActions({
   onWatchlist,
   onBackToPool,
   onRestoreToPool,
+  onWake,
+  onSnooze,
   onToggleKind,
   onEnrich,
   onLogOutreach,
@@ -2091,6 +2250,8 @@ function cardActions({
   onWatchlist?: () => void;
   onBackToPool?: () => void;
   onRestoreToPool?: () => void;
+  onWake?: () => void;
+  onSnooze?: () => void;
   onToggleKind?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
@@ -2121,12 +2282,13 @@ function cardActions({
     });
   }
   if (onWatchlist) actions.push({ key: "watchlist", label: "Eyes Peeled", onClick: onWatchlist });
+  if (onWake) actions.push({ key: "wake", label: "Wake now", onClick: onWake, primary: tab === "snoozed" });
   if (onReject) {
     actions.push({
       key: "reject",
       label: "Reject",
       onClick: onReject,
-      visibleSecondary: tab === "pool" || tab === "shortlist",
+      visibleSecondary: tab === "pool" || tab === "shortlist" || tab === "snoozed",
     });
   }
   if (onToggleSeed) {
@@ -2139,6 +2301,7 @@ function cardActions({
   }
   if (onBackToPool) actions.push({ key: "back-pool", label: "Back to Pool", onClick: onBackToPool });
   if (onRestoreToPool) actions.push({ key: "restore-pool", label: "Restore to Pool", onClick: onRestoreToPool });
+  if (onSnooze) actions.push({ key: "snooze", label: tab === "snoozed" ? "Edit" : "Snooze", onClick: onSnooze });
   if (onToggleKind && channel.kind !== "alt") {
     actions.push({
       key: "kind",
@@ -2175,6 +2338,7 @@ function statusRedundantForTab(tab: Tab | undefined, status: ChannelStatus): boo
     (tab === "pool" && status === "candidate") ||
     (tab === "shortlist" && status === "shortlisted") ||
     (tab === "watchlist" && status === "watchlist") ||
+    (tab === "snoozed" && status === "snoozed") ||
     (tab === "rejected" && status === "rejected")
   );
 }
@@ -3352,6 +3516,7 @@ function Loading() {
 
 function label(tab: Tab): string {
   if (tab === "watchlist") return "EYES PEELED";
+  if (tab === "snoozed") return "SNOOZED";
   return tab.toUpperCase();
 }
 
@@ -3361,6 +3526,7 @@ function tabCount(tab: Tab, status: StatusPayload | null): number | null {
   if (tab === "shortlist") return status.channel_counts.shortlist ?? 0;
   if (tab === "outreach") return status.channel_counts.outreach_active ?? 0;
   if (tab === "watchlist") return status.channel_counts.by_status.watchlist ?? 0;
+  if (tab === "snoozed") return status.channel_counts.by_status.snoozed ?? 0;
   if (tab === "seeds") return status.channel_counts.seeds ?? 0;
   if (tab === "rejected") return status.channel_counts.by_status.rejected ?? 0;
   if (tab === "brands") return status.channel_counts.by_kind.brand ?? 0;
@@ -3370,6 +3536,7 @@ function tabCount(tab: Tab, status: StatusPayload | null): number | null {
 function stageTitle(stage: StageTab): string {
   if (stage === "shortlist") return "Outreach potentials";
   if (stage === "watchlist") return "Eyes peeled";
+  if (stage === "snoozed") return "Snoozed channels";
   if (stage === "rejected") return "Rejected channels";
   return "Triage pool";
 }
@@ -3377,6 +3544,7 @@ function stageTitle(stage: StageTab): string {
 function stageDetail(stage: StageTab): string {
   if (stage === "shortlist") return "Shortlisted channels, including any that are also seeds.";
   if (stage === "watchlist") return "Early channels worth watching before outreach.";
+  if (stage === "snoozed") return "Good channels parked until inventory catches up.";
   if (stage === "rejected") return "Channels removed from active consideration.";
   return "Candidate channels that have not been seeded, shortlisted, or rejected.";
 }
@@ -3384,6 +3552,7 @@ function stageDetail(stage: StageTab): string {
 function emptyTitle(stage: StageTab): string {
   if (stage === "shortlist") return "No shortlisted channels";
   if (stage === "watchlist") return "No channels on watch";
+  if (stage === "snoozed") return "Nothing snoozed";
   if (stage === "rejected") return "No rejected channels";
   return "Pool is clear";
 }
@@ -3391,6 +3560,7 @@ function emptyTitle(stage: StageTab): string {
 function emptyDetail(stage: StageTab): string {
   if (stage === "shortlist") return "Shortlist cards from Pool or Search to build the outreach list.";
   if (stage === "watchlist") return "Move early prospects here with Eyes Peeled.";
+  if (stage === "snoozed") return "Snoozed channels return to Pool when their wake date arrives.";
   if (stage === "rejected") return "Rejected channels will appear here with a restore action.";
   return "Adjust the filters, expand a seed, or run a search.";
 }
@@ -3437,6 +3607,7 @@ function parseKindParam(value: string | null): ChannelKind[] {
 
 function parseSortParam(value: string | null): SortMode {
   if (value === "growth") return value;
+  if (value === "wake") return value;
   if (value === "subs_desc" || value === "subs_asc") return value;
   return "score";
 }
@@ -3498,8 +3669,20 @@ function sortChannels(channels: ChannelCardRow[], sort: SortMode): ChannelCardRo
       if (aGrowth !== null && bGrowth === null) return -1;
       if (aGrowth !== null && bGrowth !== null && bGrowth !== aGrowth) return bGrowth - aGrowth;
     }
+    if (sort === "wake") {
+      const aWake = a.snoozed_until ? Date.parse(a.snoozed_until) : Number.POSITIVE_INFINITY;
+      const bWake = b.snoozed_until ? Date.parse(b.snoozed_until) : Number.POSITIVE_INFINITY;
+      if (aWake !== bWake) return aWake - bWake;
+    }
     return (b.score ?? 0) - (a.score ?? 0);
   });
+}
+
+function snoozeUntil(duration: "1" | "3" | "6" | "custom", customDate: string): string {
+  if (duration === "custom") return new Date(`${customDate}T12:00:00`).toISOString();
+  const until = new Date();
+  until.setMonth(until.getMonth() + Number(duration));
+  return until.toISOString();
 }
 
 function formatPercent(value: number): string {

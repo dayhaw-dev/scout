@@ -1,5 +1,5 @@
 export type ChannelKind = "creator" | "brand" | "alt";
-export type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "rejected";
+export type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 export type DiscoverySource = "mention" | "collab" | "search";
 
@@ -26,6 +26,11 @@ export interface ChannelCardRow {
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
+  snoozed_until: string | null;
+  snooze_reason: string | null;
+  snoozed_at: string | null;
+  snoozed_from_status: "candidate" | "watchlist" | null;
+  woke_at: string | null;
   latest_outreach_note: string | null;
   source_seed_title: string | null;
   search_query: string | null;
@@ -80,6 +85,11 @@ export interface RawChannelRow {
   contacted_at?: string | null;
   last_touch_at?: string | null;
   next_followup_at?: string | null;
+  snoozed_until?: string | null;
+  snooze_reason?: string | null;
+  snoozed_at?: string | null;
+  snoozed_from_status?: "candidate" | "watchlist" | null;
+  woke_at?: string | null;
   kind: ChannelKind;
   kind_reason: string | null;
   yield_count?: number;
@@ -327,7 +337,13 @@ export class ScoutApi {
     });
   }
 
-  patchChannel(channelId: string, body: Partial<{ status: ChannelStatus; kind: ChannelKind; is_seed: boolean }>) {
+  patchChannel(channelId: string, body: Partial<{
+    status: ChannelStatus;
+    kind: ChannelKind;
+    is_seed: boolean;
+    snoozed_until: string;
+    snooze_reason: string;
+  }>) {
     return this.request<RawChannelRow>(`/api/channels/${encodeURIComponent(channelId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),

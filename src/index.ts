@@ -56,8 +56,12 @@ import {
   sponsorBlockTotalDurationSeconds,
   SponsorBlockVideoScan,
 } from "./lib/sponsor-scan";
+import {
+  planSnoozeTransition,
+  SnoozeValidationError,
+} from "./lib/snooze";
 
-type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "rejected";
+type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "signed" | "passed" | "ghosted";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
 type ShortlistDiscoveryFilter = "mention" | "collab" | "search";
@@ -70,6 +74,7 @@ const VALID_STATUSES = new Set<ChannelStatus>([
   "candidate",
   "shortlisted",
   "watchlist",
+  "snoozed",
   "rejected",
 ]);
 
@@ -292,8 +297,10 @@ export default {
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
+    await wakeDueSnoozed(env);
     await runSnapshotJob(env, `${SNAPSHOT_JOB_KIND}:watchlist:cron`, new Date(), {
       scope: "watchlist",
+      includeSnoozed: true,
     });
   },
 };
@@ -327,6 +334,7 @@ async function createSeed(request: Request, env: Env): Promise<Response> {
 }
 
 async function listChannels(url: URL, env: Env): Promise<Response> {
+  await wakeDueSnoozed(env);
   const requestedStatus = url.searchParams.get("status") ?? "seed";
   const isSeed = url.searchParams.get("is_seed");
 
@@ -453,10 +461,26 @@ async function patchChannel(
     .first<ChannelRow>();
   if (!existing) return json({ error: "Channel not found" }, 404);
 
-  const body = await parseJson<{ kind?: unknown; status?: unknown; is_seed?: unknown }>(request);
+  const body = await parseJson<{
+    kind?: unknown;
+    status?: unknown;
+    is_seed?: unknown;
+    snoozed_until?: unknown;
+    snooze_reason?: unknown;
+  }>(request);
   const updates: string[] = [];
   const bindings: unknown[] = [];
   let nextKind = existing.kind;
+  let snoozeTransition;
+
+  try {
+    snoozeTransition = planSnoozeTransition(existing, body);
+  } catch (error) {
+    if (error instanceof SnoozeValidationError) {
+      return json({ error: error.message }, 400);
+    }
+    throw error;
+  }
 
   if (body.kind !== undefined) {
     if (!isChannelKind(body.kind)) {
@@ -475,6 +499,22 @@ async function patchChannel(
     bindings.push(body.status);
   }
 
+  if (snoozeTransition.kind === "snooze") {
+    updates.push("snoozed_until = ?", "snooze_reason = ?", "snoozed_from_status = ?", "woke_at = NULL");
+    bindings.push(snoozeTransition.until, snoozeTransition.reason, snoozeTransition.fromStatus);
+    if (!snoozeTransition.preserveStartedAt) updates.push("snoozed_at = CURRENT_TIMESTAMP");
+  } else if (snoozeTransition.kind === "wake") {
+    updates.push("woke_at = CURRENT_TIMESTAMP");
+  } else if (snoozeTransition.kind === "clear") {
+    updates.push(
+      "snoozed_until = NULL",
+      "snooze_reason = NULL",
+      "snoozed_at = NULL",
+      "snoozed_from_status = NULL",
+      "woke_at = NULL",
+    );
+  }
+
   if (body.is_seed !== undefined) {
     if (typeof body.is_seed !== "boolean") {
       return json({ error: "is_seed must be boolean" }, 400);
@@ -482,6 +522,7 @@ async function patchChannel(
     updates.push("is_seed = ?");
     bindings.push(body.is_seed ? 1 : 0);
   }
+
 
   if (updates.length === 0) {
     return json({ error: "Nothing to update" }, 400);
@@ -926,6 +967,7 @@ function sponsorScanRollup(rows: VideoScanRow[]): {
 }
 
 async function shortlist(url: URL, env: Env): Promise<Response> {
+  await wakeDueSnoozed(env);
   const minScore = parseNumberParam(url.searchParams.get("min_score"), 0, 0, 100);
   const kinds = parseKindList(url.searchParams.get("kind"));
   const limit = parseNumberParam(url.searchParams.get("limit"), 50, 1, 100);
@@ -941,6 +983,9 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
   }
   const kindPlaceholders = kinds.map(() => "?").join(", ");
   const stageClause = shortlistStageClause(statusFilter, seedFilter);
+  const orderBy = statusFilter === "snoozed"
+    ? "c.snoozed_until IS NULL, c.snoozed_until ASC, c.score DESC"
+    : "c.score DESC, c.subscriber_count ASC";
 
   const { results } = await env.SCOUT_DB.prepare(
     `WITH latest_scans AS (
@@ -989,7 +1034,7 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       AND (? IS NULL OR c.subscriber_count <= ?)
       AND (? IS NULL OR c.discovered_via = ?)
       AND (? IS NULL OR c.outreach_status = ?)
-    ORDER BY c.score DESC, c.subscriber_count ASC
+    ORDER BY ${orderBy}
     LIMIT ?`,
   )
     .bind(
@@ -2183,7 +2228,9 @@ async function snapshotTargetRows(
 ): Promise<SnapshotTargetRow[]> {
   const where =
     options.scope === "watchlist"
-      ? "c.status = 'watchlist'"
+      ? options.includeSnoozed
+        ? "c.status IN ('watchlist', 'snoozed')"
+        : "c.status = 'watchlist'"
       : options.scope === "seeds"
         ? "c.is_seed = 1"
         : "c.channel_id = ?";
@@ -2201,7 +2248,7 @@ async function snapshotTargetRows(
       GROUP BY channel_id
     ) latest ON latest.channel_id = c.channel_id
     WHERE ${where}
-    ORDER BY c.status = 'watchlist' DESC, c.is_seed DESC, c.updated_at DESC`,
+    ORDER BY c.status = 'watchlist' DESC, c.status = 'snoozed' DESC, c.is_seed DESC, c.updated_at DESC`,
   )
     .bind(...bindings)
     .all<SnapshotTargetRow>();
@@ -2408,6 +2455,7 @@ async function enrichTargets(
 }
 
 async function status(env: Env): Promise<Response> {
+  await wakeDueSnoozed(env);
   const requestsToday = await env.SCOUT_DB.prepare(
     "SELECT COUNT(*) AS count FROM api_log WHERE date(created_at) = date('now')",
   ).first<{ count: number }>();
@@ -2682,6 +2730,11 @@ interface ChannelRow {
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
+  snoozed_until: string | null;
+  snooze_reason: string | null;
+  snoozed_at: string | null;
+  snoozed_from_status: string | null;
+  woke_at: string | null;
   raw_json: string;
   mention_count: number;
   kind: ChannelKind;
@@ -2749,6 +2802,7 @@ interface ChannelSponsorRollup {
 interface SnapshotRunOptions {
   scope: SnapshotScope;
   channelId?: string | null;
+  includeSnoozed?: boolean;
 }
 
 interface LiveChannelFields {
@@ -3353,6 +3407,11 @@ function channelSummary(
     contacted_at: row.contacted_at ?? null,
     last_touch_at: row.last_touch_at ?? null,
     next_followup_at: row.next_followup_at ?? null,
+    snoozed_until: row.snoozed_until ?? null,
+    snooze_reason: row.snooze_reason ?? null,
+    snoozed_at: row.snoozed_at ?? null,
+    snoozed_from_status: row.snoozed_from_status ?? null,
+    woke_at: row.woke_at ?? null,
     latest_outreach_note: row.latest_outreach_note ?? null,
     source_seed_title: row.source_seed_title,
     search_query: row.search_query,
@@ -3556,7 +3615,20 @@ function parseShortlistStatusFilter(value: string | null): ShortlistStatusFilter
   if (value === null || value === "") return null;
   if (value === "all") return value;
   if (VALID_STATUSES.has(value as ChannelStatus)) return value as ChannelStatus;
-  throw new ResponseError("status must be candidate, shortlisted, watchlist, rejected, or all.", 400);
+  throw new ResponseError("status must be candidate, shortlisted, watchlist, snoozed, rejected, or all.", 400);
+}
+
+async function wakeDueSnoozed(env: Env): Promise<number> {
+  const result = await env.SCOUT_DB.prepare(
+    `UPDATE channels
+    SET status = 'candidate',
+        woke_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE status = 'snoozed'
+      AND snoozed_until IS NOT NULL
+      AND datetime(snoozed_until) <= CURRENT_TIMESTAMP`,
+  ).run();
+  return Number(result.meta.changes ?? 0);
 }
 
 function parseOutreachStatusFilter(value: string | null): OutreachStatus | null {

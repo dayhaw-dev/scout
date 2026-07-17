@@ -50,9 +50,9 @@ test("ui card actions use one primary action and overflow for secondary actions"
   assert.match(source, /primary: tab === "pool"/);
   assert.match(source, /primary: tab === "shortlist" \|\| tab === "outreach"/);
   assert.match(source, /updateOutreach/);
-  assert.match(source, /visibleSecondary: tab === "pool" \|\| tab === "shortlist"/);
+  assert.match(source, /visibleSecondary: tab === "pool" \|\| tab === "shortlist" \|\| tab === "snoozed"/);
   assert.match(source, /secondary-action/);
-  assert.match(source, /onEnrich=\{stage !== "rejected" \? \(\) => void enrichCard\(channel\) : undefined\}/);
+  assert.match(source, /onEnrich=\{stage !== "rejected" && stage !== "snoozed" \? \(\) => void enrichCard\(channel\) : undefined\}/);
   assert.match(source, /onEnrich=\{\(\) => void enrichCard\(channel\)\}/);
   assert.match(source, /enrichFreshDays: enrichmentFreshDays\(channel\)/);
   assert.match(source, /title: disabled \? `enriched \$\{enrichFreshDays\}d ago` : "Enrich activity"/);

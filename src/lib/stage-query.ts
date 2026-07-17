@@ -1,4 +1,4 @@
-export type StageStatusFilter = "candidate" | "shortlisted" | "watchlist" | "rejected" | "all" | null;
+export type StageStatusFilter = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected" | "all" | null;
 export type StageSeedFilter = boolean | null;
 
 export interface StageClause {
@@ -14,7 +14,7 @@ export function shortlistStageClause(
   const bindings: Array<string | number> = [];
 
   if (statusFilter === null) {
-    clauses.push("c.status IN ('candidate', 'shortlisted', 'watchlist')");
+    clauses.push("c.status IN ('candidate', 'shortlisted', 'watchlist', 'snoozed')");
   } else if (statusFilter !== "all") {
     clauses.push("c.status = ?");
     bindings.push(statusFilter);

@@ -1126,6 +1126,11 @@ a:hover {
   color: #fca5a5;
 }
 
+.freshness-stale {
+  border-style: dashed;
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.16);
+}
+
 .sparkline-wrap {
   position: relative;
   width: 100%;

@@ -156,6 +156,28 @@ export function seedFreshnessCacheIsFresh(
     && cachedNewestStoredVideoAt === currentNewestStoredVideoAt;
 }
 
+export function seedFreshnessCacheIsUsable(
+  status: string,
+  error: string | null,
+  checkedAt: string,
+  cachedStoredVideoCount: number,
+  cachedNewestStoredVideoAt: string | null,
+  currentStoredVideoCount: number,
+  currentNewestStoredVideoAt: string | null,
+  now = Date.now(),
+): boolean {
+  return status !== "error"
+    && error === null
+    && seedFreshnessCacheIsFresh(
+      checkedAt,
+      cachedStoredVideoCount,
+      cachedNewestStoredVideoAt,
+      currentStoredVideoCount,
+      currentNewestStoredVideoAt,
+      now,
+    );
+}
+
 function newestPublishedAt(videos: Array<{ published_at: string | null }>): string | null {
   let newest: string | null = null;
   let newestTime = Number.NEGATIVE_INFINITY;

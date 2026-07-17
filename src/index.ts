@@ -67,7 +67,7 @@ import {
 import {
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
-  seedFreshnessCacheIsFresh,
+  seedFreshnessCacheIsUsable,
   StoredSeedVideo,
 } from "./lib/seed-freshness";
 
@@ -464,19 +464,22 @@ async function refreshSeedFreshness(
   )
     .bind(channelId)
     .first<SeedFreshnessCacheRow>();
+  const cachedGood = cached?.status !== "error" ? cached : null;
 
   if (
-    cached
+    cachedGood
     && !force
-    && seedFreshnessCacheIsFresh(
-      cached.checked_at,
-      cached.stored_video_count,
-      cached.newest_stored_video_at,
+    && seedFreshnessCacheIsUsable(
+      cachedGood.status,
+      cachedGood.error,
+      cachedGood.checked_at,
+      cachedGood.stored_video_count,
+      cachedGood.newest_stored_video_at,
       stats.stored_video_count,
       stats.newest_stored_video_at,
     )
   ) {
-    return json({ ...seedFreshnessPayload(cached), cached: true });
+    return json({ ...seedFreshnessPayload(cachedGood), cached: true });
   }
 
   const stored = await env.SCOUT_DB.prepare(
@@ -511,7 +514,30 @@ async function refreshSeedFreshness(
       checked_at: checkedAt,
     };
   } catch (error) {
-    row = {
+    const failureMessage = errorMessage(error);
+    if (cachedGood) {
+      await env.SCOUT_DB.prepare(
+        `UPDATE seed_mining_freshness
+        SET error = ?
+        WHERE channel_id = ?`,
+      )
+        .bind(failureMessage, channelId)
+        .run();
+      return json({
+        ...seedFreshnessPayload({ ...cachedGood, error: failureMessage }),
+        stale: true,
+        cached: true,
+      });
+    }
+
+    if (cached) {
+      await env.SCOUT_DB.prepare(
+        "DELETE FROM seed_mining_freshness WHERE channel_id = ?",
+      )
+        .bind(channelId)
+        .run();
+    }
+    const errorRow: SeedFreshnessCacheRow = {
       channel_id: channelId,
       latest_upload_at: null,
       newest_stored_video_at: stats.newest_stored_video_at,
@@ -521,9 +547,14 @@ async function refreshSeedFreshness(
       never_mined: stats.stored_video_count === 0 ? 1 : 0,
       rss_entry_count: 0,
       status: "error",
-      error: errorMessage(error),
+      error: failureMessage,
       checked_at: checkedAt,
     };
+    return json({
+      ...seedFreshnessPayload(errorRow),
+      stale: true,
+      cached: false,
+    });
   }
 
   await env.SCOUT_DB.prepare(
@@ -622,7 +653,9 @@ function seedFreshnessView(row: SeedListRow): SeedFreshnessView | null {
   };
   return {
     ...seedFreshnessPayload(cached),
-    stale: !seedFreshnessCacheIsFresh(
+    stale: !seedFreshnessCacheIsUsable(
+      cached.status,
+      cached.error,
       cached.checked_at,
       cached.stored_video_count,
       cached.newest_stored_video_at,

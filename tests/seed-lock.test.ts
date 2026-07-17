@@ -135,6 +135,95 @@ test("locked seeds can refresh read-only RSS freshness without unlocking", async
   assert.deepEqual(state.seedMutations, []);
 });
 
+test("failed forced freshness preserves the last good row and marks it stale", async () => {
+  const worker = await workerPromise;
+  const priorGood = {
+    channel_id: LOCKED_CHANNEL_ID,
+    latest_upload_at: "2026-07-16T12:00:00Z",
+    newest_stored_video_at: null,
+    stored_video_count: 0,
+    unmined_count: null,
+    unmined_is_lower_bound: 0,
+    never_mined: 1,
+    rss_entry_count: 15,
+    status: "ok",
+    error: null,
+    checked_at: "2026-07-16T12:05:00Z",
+  };
+  const state = createFakeD1State({
+    lockedSeed: {
+      channel_id: LOCKED_CHANNEL_ID,
+      title: "Brian Lagerstrom",
+      handle: "BrianLagerstrom",
+      is_seed: 1,
+      seed_locked: 1,
+    },
+    freshnessRow: priorGood,
+  });
+  const originalFetch = globalThis.fetch;
+  let outboundFetches = 0;
+  globalThis.fetch = async () => {
+    outboundFetches += 1;
+    return new Response("YouTube unavailable", { status: 500 });
+  };
+
+  try {
+    const response = await worker.fetch(
+      apiRequest(`/api/seeds/${LOCKED_CHANNEL_ID}/freshness`, "POST", { force: true }),
+      testEnv(state.db),
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      latest_upload_at: string | null;
+      status: string;
+      error: string | null;
+      stale: boolean;
+      checked_at: string;
+    };
+    assert.equal(body.latest_upload_at, priorGood.latest_upload_at);
+    assert.equal(body.status, "ok");
+    assert.match(body.error ?? "", /failed with 500/);
+    assert.equal(body.stale, true);
+    assert.equal(body.checked_at, priorGood.checked_at);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(outboundFetches, 3);
+  assert.equal(state.freshnessMutations.length, 1);
+  assert.match(state.freshnessMutations[0], /UPDATE seed_mining_freshness/);
+  assert.doesNotMatch(state.freshnessMutations[0], /INSERT INTO seed_mining_freshness/);
+});
+
+test("failed freshness without a good row is not cached", async () => {
+  const worker = await workerPromise;
+  const state = createFakeD1State({
+    lockedSeed: {
+      channel_id: LOCKED_CHANNEL_ID,
+      title: "Brian Lagerstrom",
+      handle: "BrianLagerstrom",
+      is_seed: 1,
+      seed_locked: 1,
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("YouTube unavailable", { status: 404 });
+
+  try {
+    const response = await worker.fetch(
+      apiRequest(`/api/seeds/${LOCKED_CHANNEL_ID}/freshness`, "POST", { force: true }),
+      testEnv(state.db),
+    );
+    const body = await response.json() as { status: string; stale: boolean };
+    assert.equal(body.status, "error");
+    assert.equal(body.stale, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(state.freshnessMutations, []);
+});
+
 test("global regen with an empty server target set performs no seed computation", async () => {
   const worker = await workerPromise;
   const state = createFakeD1State({ operationTargets: [] });
@@ -198,9 +287,11 @@ interface FakeState {
 function createFakeD1State({
   lockedSeed = null,
   operationTargets = [],
+  freshnessRow = null,
 }: {
   lockedSeed?: FakeSeedRow | null;
   operationTargets?: FakeSeedRow[];
+  freshnessRow?: Record<string, unknown> | null;
 }): FakeState {
   const seedMutations: string[] = [];
   const freshnessMutations: string[] = [];
@@ -224,7 +315,7 @@ function createFakeD1State({
           newest_stored_video_at: null,
         } as T;
       }
-      if (this.query.includes("FROM seed_mining_freshness")) return null;
+      if (this.query.includes("FROM seed_mining_freshness")) return freshnessRow as T | null;
       if (this.query.includes("FROM channels WHERE channel_id = ?")) {
         assert.equal(this.bindings[0], LOCKED_CHANNEL_ID);
         return lockedSeed as T | null;
@@ -234,7 +325,11 @@ function createFakeD1State({
 
     async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
       if (this.query.startsWith("DELETE FROM auth_failures")) return d1Result<T>([]);
-      if (this.query.includes("INSERT INTO seed_mining_freshness")) {
+      if (
+        this.query.includes("INSERT INTO seed_mining_freshness")
+        || this.query.includes("UPDATE seed_mining_freshness")
+        || this.query.includes("DELETE FROM seed_mining_freshness")
+      ) {
         freshnessMutations.push(this.query);
         return d1Result<T>([]);
       }

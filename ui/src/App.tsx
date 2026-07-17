@@ -23,6 +23,7 @@ import {
 } from "./api";
 import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, MOVER_CONFIG, REACH_CONFIG } from "./config";
+import { seedFreshnessPacingMs } from "./seed-freshness";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
@@ -1369,6 +1370,8 @@ function SeedsView({
   const [searches, setSearches] = useState<SearchRecord[]>([]);
   const [seedSort, setSeedSort] = useState<SeedSortMode>("unmined");
   const freshnessRunRef = useRef(0);
+  const freshnessQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const freshnessHasDispatchedRef = useRef(false);
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
   const unlockedSeeds = useMemo(() => seeds.filter((seed) => !seed.seed_locked), [seeds]);
   const sortedSeeds = useMemo(() => sortSeeds(seeds, seedSort), [seeds, seedSort]);
@@ -1381,21 +1384,36 @@ function SeedsView({
     )));
   }, []);
 
+  const requestSeedFreshness = useCallback((channelId: string, force = false) => {
+    const request = freshnessQueueRef.current.then(async () => {
+      if (freshnessHasDispatchedRef.current) {
+        await pause(seedFreshnessPacingMs());
+      }
+      freshnessHasDispatchedRef.current = true;
+      return api.refreshSeedFreshness(channelId, force);
+    });
+    freshnessQueueRef.current = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    return request;
+  }, [api]);
+
   const refreshStaleFreshness = useCallback(async (rows: RawChannelRow[]) => {
     const runId = freshnessRunRef.current + 1;
     freshnessRunRef.current = runId;
     const staleSeeds = rows.filter((seed) => !seed.mining_freshness || seed.mining_freshness.stale);
 
-    for (const seed of staleSeeds) {
+    for (let index = 0; index < staleSeeds.length; index += 1) {
+      const seed = staleSeeds[index];
       if (freshnessRunRef.current !== runId) return;
       try {
-        applyFreshness(seed.channel_id, await api.refreshSeedFreshness(seed.channel_id));
+        applyFreshness(seed.channel_id, await requestSeedFreshness(seed.channel_id));
       } catch {
         // Automatic checks fail quietly per seed; the manual check reports failures.
       }
-      await pause(300);
     }
-  }, [api, applyFreshness]);
+  }, [applyFreshness, requestSeedFreshness]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1539,10 +1557,9 @@ function SeedsView({
         })),
         controller,
         runItem: async (seed: RawChannelRow) => {
-          const freshness = await api.refreshSeedFreshness(seed.channel_id, true);
+          const freshness = await requestSeedFreshness(seed.channel_id, true);
           applyFreshness(seed.channel_id, freshness);
-          await pause(300);
-          if (freshness.status === "error") {
+          if (freshness.error) {
             throw new Error(freshness.error ?? "YouTube RSS freshness check failed.");
           }
           return freshness;
@@ -2930,10 +2947,10 @@ function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | nul
   if (freshness.never_mined) {
     return (
       <span
-        className="chip freshness-chip freshness-never"
-        title={freshness.status === "error" ? freshness.error ?? undefined : "This seed has no stored videos."}
+        className={`chip freshness-chip freshness-never ${freshness.stale ? "freshness-stale" : ""}`}
+        title={freshness.error ?? "This seed has no stored videos."}
       >
-        NEVER MINED
+        NEVER MINED{freshness.stale ? " · STALE" : ""}
       </span>
     );
   }
@@ -2941,19 +2958,27 @@ function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | nul
     return <span className="chip freshness-chip freshness-error" title={freshness.error ?? undefined}>RSS ERROR</span>;
   }
   if (freshness.status === "empty") {
-    return <span className="chip freshness-chip freshness-pending">NO RSS ENTRIES</span>;
+    return (
+      <span className={`chip freshness-chip freshness-pending ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
+        NO RSS ENTRIES{freshness.stale ? " · STALE" : ""}
+      </span>
+    );
   }
   if ((freshness.unmined_count ?? 0) > 0) {
     return (
       <span
-        className="chip freshness-chip freshness-unmined"
-        title={`Checked ${relativeTime(freshness.checked_at)} from ${freshness.rss_entry_count} RSS entries.`}
+        className={`chip freshness-chip freshness-unmined ${freshness.stale ? "freshness-stale" : ""}`}
+        title={freshness.error ?? `Checked ${relativeTime(freshness.checked_at)} from ${freshness.rss_entry_count} RSS entries.`}
       >
-        {freshness.unmined_count}{freshness.unmined_is_lower_bound ? "+" : ""} UNMINED
+        {freshness.unmined_count}{freshness.unmined_is_lower_bound ? "+" : ""} UNMINED{freshness.stale ? " · STALE" : ""}
       </span>
     );
   }
-  return <span className="chip freshness-chip freshness-mined">MINED</span>;
+  return (
+    <span className={`chip freshness-chip freshness-mined ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
+      MINED{freshness.stale ? " · STALE" : ""}
+    </span>
+  );
 }
 
 function SeedFreshnessRecency({ freshness }: { freshness: SeedMiningFreshness | null }) {

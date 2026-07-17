@@ -5,9 +5,15 @@ import {
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
   seedFreshnessCacheIsFresh,
+  seedFreshnessCacheIsUsable,
   YOUTUBE_RSS_ENTRY_LIMIT,
 } from "../src/lib/seed-freshness.js";
 import { RecentVideo } from "../src/lib/sponsor-scan.js";
+import {
+  SEED_FRESHNESS_PACING_MAX_MS,
+  SEED_FRESHNESS_PACING_MIN_MS,
+  seedFreshnessPacingMs,
+} from "../ui/src/seed-freshness.js";
 
 test("freshness counts feed entries before the newest stored video, including Shorts", () => {
   const rss: RecentVideo[] = [
@@ -136,6 +142,29 @@ test("six-hour cache also invalidates immediately when stored coverage changes",
   );
 });
 
+test("errored freshness rows and failed refresh markers are never usable cache hits", () => {
+  const now = Date.parse("2026-07-17T12:00:00Z");
+  const args = [
+    "2026-07-17T11:59:00Z",
+    30,
+    "2026-07-16T00:00:00Z",
+    30,
+    "2026-07-16T00:00:00Z",
+    now,
+  ] as const;
+
+  assert.equal(seedFreshnessCacheIsUsable("ok", null, ...args), true);
+  assert.equal(seedFreshnessCacheIsUsable("error", "RSS 500", ...args), false);
+  assert.equal(seedFreshnessCacheIsUsable("ok", "RSS 500", ...args), false);
+});
+
+test("seed freshness client pacing adds bounded jitter between sequential requests", () => {
+  assert.equal(seedFreshnessPacingMs(0), SEED_FRESHNESS_PACING_MIN_MS);
+  assert.equal(seedFreshnessPacingMs(1), SEED_FRESHNESS_PACING_MAX_MS);
+  assert.ok(seedFreshnessPacingMs(0.5) > SEED_FRESHNESS_PACING_MIN_MS);
+  assert.ok(seedFreshnessPacingMs(0.5) < SEED_FRESHNESS_PACING_MAX_MS);
+});
+
 test("freshness migration adds a dependent cache table without rebuilding channels", () => {
   const migration = readFileSync("migrations/0022_seed_mining_freshness.sql", "utf8");
 
@@ -160,4 +189,8 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(app, /15\+|unmined_is_lower_bound/);
   assert.match(app, /Unmined desc/);
   assert.match(app, /NEVER MINED/);
+  assert.match(app, /seedFreshnessPacingMs/);
+  assert.match(app, /freshnessQueueRef/);
+  assert.match(app, /freshness\.error/);
+  assert.match(app, /· STALE/);
 });

@@ -158,6 +158,9 @@ test("phase 9 UI exposes snapshot growth states and mover thresholds", () => {
   assert.match(app, /TRACKING/);
   assert.match(app, /MOVER/);
   assert.match(app, /function Sparkline/);
+  assert.match(app, /growthWindowLabel/);
+  assert.match(app, /point\.timestamp - firstTime/);
+  assert.match(app, /sparkline-change/);
   assert.match(config, /subsGrowth7d: 5/);
   assert.match(config, /subsGrowth30d: 15/);
   assert.match(api, /last_snapshot_run/);

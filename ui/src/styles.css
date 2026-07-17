@@ -793,6 +793,10 @@ a:hover {
   color: #8fb4c4;
 }
 
+.stat-block.sponsor-none strong {
+  font-size: 11px;
+}
+
 .status-chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -1007,10 +1011,16 @@ a:hover {
   background: rgba(15, 23, 42, 0.55);
 }
 
+.sparkline-wrap {
+  position: relative;
+  width: 100%;
+  margin-top: 2px;
+}
+
 .sparkline {
+  display: block;
   width: 100%;
   height: 34px;
-  margin-top: 2px;
   border: 1px solid rgba(34, 211, 238, 0.12);
   background: rgba(10, 18, 32, 0.5);
 }
@@ -1020,6 +1030,17 @@ a:hover {
   stroke: #22d3ee;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+
+.sparkline-change {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 1px 3px;
+  background: rgba(10, 18, 32, 0.82);
+  color: #9bdbe6;
+  font-size: 10px;
+  line-height: 1;
 }
 
 .chip,

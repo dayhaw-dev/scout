@@ -15,6 +15,7 @@ export interface ScorableChannel {
   median_recent_views?: number | null;
   enriched_at?: string | null;
   recent_velocity?: number | null;
+  email_confirmed?: boolean | number | null;
 }
 
 export interface ScoreResult {
@@ -35,12 +36,19 @@ export interface ScoreComponent {
 }
 
 export const SCORE_CONFIG = {
-  weights: {
-    subRangeFit: 30,
-    engagementReach: 30,
-    mentionStrength: 15,
-    contactability: 10,
-    legacyEngagement: 15,
+  formulas: {
+    enriched: {
+      subRangeFit: 20,
+      engagementReach: 45,
+      mentionStrength: 20,
+      contactability: 15,
+    },
+    unenriched: {
+      subRangeFit: 20,
+      legacyEngagement: 45,
+      mentionStrength: 20,
+      contactability: 15,
+    },
   },
   subscribers: {
     floor: 5_000,
@@ -56,7 +64,9 @@ export const SCORE_CONFIG = {
     collabBonus: 0.15,
   },
   reach: {
-    fullReach: REACH_CONFIG.fullScoreReach,
+    decentReach: REACH_CONFIG.fullScoreReach,
+    decentCredit: 0.85,
+    fullReach: 0.6,
     fullUploads90d: 12,
   },
 } as const;
@@ -68,12 +78,21 @@ export function scoreChannel(channel: ScorableChannel, now = new Date()): ScoreR
 
   const components: ScoreBreakdown["components"] = {};
   const notes: string[] = [];
+  const enriched = Boolean(channel.enriched_at);
 
-  components.subRangeFit = subRangeFit(channel.subscriber_count);
-  components.engagementReach = engagementReach(channel, now, notes);
-  components.mentionStrength = mentionStrength(channel);
-  components.contactability = contactability(channel);
-  components.legacyEngagement = legacyEngagement(channel, notes);
+  if (enriched) {
+    const weights = SCORE_CONFIG.formulas.enriched;
+    components.subRangeFit = subRangeFit(channel.subscriber_count, weights.subRangeFit);
+    components.engagementReach = engagementReach(channel, now, weights.engagementReach);
+    components.mentionStrength = mentionStrength(channel, weights.mentionStrength);
+    components.contactability = contactability(channel, weights.contactability);
+  } else {
+    const weights = SCORE_CONFIG.formulas.unenriched;
+    components.subRangeFit = subRangeFit(channel.subscriber_count, weights.subRangeFit);
+    components.legacyEngagement = legacyEngagement(channel, notes, weights.legacyEngagement);
+    components.mentionStrength = mentionStrength(channel, weights.mentionStrength);
+    components.contactability = contactability(channel, weights.contactability);
+  }
 
   const total = Math.round(
     Object.values(components).reduce((sum, component) => sum + component.points, 0) *
@@ -90,8 +109,7 @@ export function scoreChannel(channel: ScorableChannel, now = new Date()): ScoreR
   };
 }
 
-function subRangeFit(subscribers: number | null): ScoreComponent {
-  const weight = SCORE_CONFIG.weights.subRangeFit;
+function subRangeFit(subscribers: number | null, weight: number): ScoreComponent {
   if (subscribers === null) {
     return { points: 0, weight, reason: "missing subscriber count" };
   }
@@ -113,12 +131,11 @@ function subRangeFit(subscribers: number | null): ScoreComponent {
   };
 }
 
-function legacyEngagement(channel: ScorableChannel, notes: string[]): ScoreComponent {
-  const weight = SCORE_CONFIG.weights.legacyEngagement;
-  if (channel.enriched_at) {
-    return { points: 0, weight, reason: "not used after activity enrichment" };
-  }
-
+function legacyEngagement(
+  channel: ScorableChannel,
+  notes: string[],
+  weight: number,
+): ScoreComponent {
   const views = channel.view_count;
   const videos = channel.video_count;
   const subscribers = channel.subscriber_count;
@@ -136,8 +153,7 @@ function legacyEngagement(channel: ScorableChannel, notes: string[]): ScoreCompo
   };
 }
 
-function mentionStrength(channel: ScorableChannel): ScoreComponent {
-  const weight = SCORE_CONFIG.weights.mentionStrength;
+function mentionStrength(channel: ScorableChannel, weight: number): ScoreComponent {
   const mentions = Math.max(0, channel.mention_count ?? 0);
   const mentionScalar = Math.log1p(mentions) / Math.log1p(SCORE_CONFIG.mention.fullMentions);
   const collabBonus = channel.discovered_via === "collab" ? SCORE_CONFIG.mention.collabBonus : 0;
@@ -150,20 +166,18 @@ function mentionStrength(channel: ScorableChannel): ScoreComponent {
   };
 }
 
-function engagementReach(channel: ScorableChannel, now: Date, notes: string[]): ScoreComponent {
-  const weight = SCORE_CONFIG.weights.engagementReach;
-  if (!channel.enriched_at) {
-    notes.push("engagement reach requires activity enrichment");
-    return { points: 0, weight, reason: "not enriched yet" };
-  }
-
+function engagementReach(
+  channel: ScorableChannel,
+  now: Date,
+  weight: number,
+): ScoreComponent {
   const reach = effectiveReach(
     channel.recent_velocity,
     channel.subscriber_count,
     channel.last_upload_at,
     now,
   );
-  const reachScalar = clamp01(reach.effectiveReach / SCORE_CONFIG.reach.fullReach);
+  const reachScalar = reachCreditScalar(reach.effectiveReach);
   const uploads = Math.max(0, channel.uploads_last_90d ?? 0);
   const cadenceScalar = clamp01(uploads / SCORE_CONFIG.reach.fullUploads90d);
   const recencyScalar = reach.recencyFactor;
@@ -180,16 +194,31 @@ function engagementReach(channel: ScorableChannel, now: Date, notes: string[]): 
   return {
     points: roundPoints(weight * scalar),
     weight,
-    reason: `${viewsReason}; reach ${roundPoints(reach.effectiveReach)} effective (${roundPoints(reach.rawReach)} raw, recency ${roundPoints(reach.recencyFactor)}, sub damping ${roundPoints(reach.subscriberFactor)}), ${recencyReason}, ${uploads} uploads/90d`,
+    reason: `${viewsReason}; reach ${roundPoints(reach.effectiveReach)} effective, ${roundPoints(reachScalar)} scoring credit (${roundPoints(reach.rawReach)} raw, recency ${roundPoints(reach.recencyFactor)}, sub damping ${roundPoints(reach.subscriberFactor)}), ${recencyReason}, ${uploads} uploads/90d`,
   };
 }
 
-function contactability(channel: ScorableChannel): ScoreComponent {
-  const weight = SCORE_CONFIG.weights.contactability;
+export function reachCreditScalar(effectiveReachValue: number): number {
+  const reach = Math.max(0, effectiveReachValue);
+  const { decentReach, decentCredit, fullReach } = SCORE_CONFIG.reach;
+  if (reach <= decentReach) {
+    return clamp01((reach / decentReach) * decentCredit);
+  }
+  if (reach < fullReach) {
+    const progress = (reach - decentReach) / (fullReach - decentReach);
+    return clamp01(decentCredit + progress * (1 - decentCredit));
+  }
+  return 1;
+}
+
+function contactability(channel: ScorableChannel, weight: number): ScoreComponent {
   const raw = parseRaw(channel.raw_json);
   const signals = contactSignals(raw);
   if (signals.includes("email")) {
-    return { points: weight, weight, reason: "email present in raw_json" };
+    return { points: weight, weight, reason: "extracted email present in raw_json" };
+  }
+  if (channel.email_confirmed === true || channel.email_confirmed === 1) {
+    return { points: weight, weight, reason: "business email manually confirmed" };
   }
 
   const contactCount = new Set(signals).size;
@@ -197,7 +226,7 @@ function contactability(channel: ScorableChannel): ScoreComponent {
   return {
     points: roundPoints(weight * clamp01(contactCount / 4)),
     weight,
-    reason: `${contactCount} named contact field(s), no email`,
+    reason: `${contactCount} named contact field(s); email presence unknown`,
   };
 }
 

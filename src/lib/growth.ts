@@ -7,8 +7,11 @@ export interface SnapshotPoint {
 
 export interface GrowthMetrics {
   subs_growth_7d: number | null;
+  subs_growth_7d_days: number | null;
   subs_growth_30d: number | null;
+  subs_growth_30d_days: number | null;
   views_growth_30d: number | null;
+  views_growth_30d_days: number | null;
   tracking_days: number | null;
   first_snapshot_at: string | null;
   latest_snapshot_at: string | null;
@@ -49,22 +52,16 @@ export function computeGrowthMetrics(
     };
   }
 
+  const baseline7d = nearestSnapshot(sorted, new Date(now.getTime() - 7 * DAY_MS));
+  const baseline30d = nearestSnapshot(sorted, new Date(now.getTime() - 30 * DAY_MS));
+
   return {
-    subs_growth_7d: percentGrowth(
-      nearestSnapshot(sorted, new Date(now.getTime() - 7 * DAY_MS)),
-      latest,
-      "subscriber_count",
-    ),
-    subs_growth_30d: percentGrowth(
-      nearestSnapshot(sorted, new Date(now.getTime() - 30 * DAY_MS)),
-      latest,
-      "subscriber_count",
-    ),
-    views_growth_30d: percentGrowth(
-      nearestSnapshot(sorted, new Date(now.getTime() - 30 * DAY_MS)),
-      latest,
-      "view_count",
-    ),
+    subs_growth_7d: percentGrowth(baseline7d, latest, "subscriber_count"),
+    subs_growth_7d_days: growthSpanDays(baseline7d, latest, 7),
+    subs_growth_30d: percentGrowth(baseline30d, latest, "subscriber_count"),
+    subs_growth_30d_days: growthSpanDays(baseline30d, latest, 30),
+    views_growth_30d: percentGrowth(baseline30d, latest, "view_count"),
+    views_growth_30d_days: growthSpanDays(baseline30d, latest, 30),
     tracking_days: trackingDays,
     first_snapshot_at: first.taken_at,
     latest_snapshot_at: latest.taken_at,
@@ -82,8 +79,11 @@ export function isMover(metrics: Pick<GrowthMetrics, "subs_growth_7d" | "subs_gr
 function emptyGrowth(snapshots: SnapshotPoint[]): GrowthMetrics {
   return {
     subs_growth_7d: null,
+    subs_growth_7d_days: null,
     subs_growth_30d: null,
+    subs_growth_30d_days: null,
     views_growth_30d: null,
+    views_growth_30d_days: null,
     tracking_days: null,
     first_snapshot_at: null,
     latest_snapshot_at: null,
@@ -112,4 +112,15 @@ function percentGrowth(
   }
 
   return ((end - start) / start) * 100;
+}
+
+function growthSpanDays(
+  baseline: SnapshotPoint,
+  latest: SnapshotPoint,
+  windowDays: number,
+): number {
+  const baselineTime = new Date(baseline.taken_at).getTime();
+  const latestTime = new Date(latest.taken_at).getTime();
+  const actualDays = Math.max(0, Math.floor((latestTime - baselineTime) / DAY_MS));
+  return Math.min(windowDays, actualDays);
 }

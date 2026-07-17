@@ -190,9 +190,11 @@ test("frontend exposes sponsor scan action, modal, and result chip", () => {
   assert.match(app, /sponsorStatsFromRollup\(brand\)/);
   assert.match(app, /label="sponsors"/);
   assert.match(app, /sponsor_scan_scanned_at && channel\.sponsorship_rate !== null/);
-  assert.match(app, /hasSignals: channel\.sponsor_scan_sponsored > 0/);
-  assert.match(app, /value=\{sponsorStats\.hasSignals \? `\$\{Math\.round\(sponsorStats\.rate \* 100\)\}%` : "\?"/);
-  assert.match(app, /scanned, no signals found\. Unconfirmed, not unsponsored\./);
+  assert.match(app, /type SponsorCardState = "found" \| "none" \| "unscanned"/);
+  assert.match(app, /return "NONE FOUND \(SB\)"/);
+  assert.match(app, /return "\?"/);
+  assert.match(app, /Absence is not proof of no sponsors/);
+  assert.match(app, /No sponsor scan batch exists yet/);
   assert.match(app, /muted-stat/);
   assert.match(app, /No signals found\. Unconfirmed, not unsponsored/);
   assert.match(worker, /sponsorRollupMapForChannels/);
@@ -204,6 +206,7 @@ test("frontend exposes sponsor scan action, modal, and result chip", () => {
   assert.match(styles, /\.sponsor-dialog/);
   assert.match(styles, /\.scan-open-fallback/);
   assert.match(styles, /\.stat-block/);
+  assert.match(styles, /\.stat-block\.sponsor-none strong/);
 }
 );
 

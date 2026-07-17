@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SCORE_CONFIG, scoreChannel } from "../src/lib/score.js";
+import { reachCreditScalar, SCORE_CONFIG, scoreChannel } from "../src/lib/score.js";
 
 test("scores mid-size creators above mega celebrities and excludes brands", () => {
   const now = new Date("2026-07-07T00:00:00Z");
@@ -80,13 +80,41 @@ test("contactability uses named raw_json fields even when URLs are redirects", (
   assert.match(result.breakdown.components.contactability.reason, /named contact field/);
 });
 
+test("manual business-email confirmation grants full contactability and reverses cleanly", () => {
+  const channel = {
+    kind: "creator" as const,
+    subscriber_count: 95_000,
+    video_count: 120,
+    view_count: 8_000_000,
+    published_at: "2021-01-01T00:00:00.000Z",
+    discovered_via: "search",
+    mention_count: 1,
+    raw_json: JSON.stringify({ email: null, instagram: "https://instagram.com/example" }),
+  };
+  const now = new Date("2026-07-16T00:00:00Z");
+  const before = scoreChannel(channel, now);
+  const marked = scoreChannel({ ...channel, email_confirmed: true }, now);
+  const unmarked = scoreChannel({ ...channel, email_confirmed: false }, now);
+
+  assert.equal(before.breakdown?.components.contactability.points, 3.8);
+  assert.equal(marked.breakdown?.components.contactability.points, 15);
+  assert.match(marked.breakdown?.components.contactability.reason ?? "", /manually confirmed/);
+  assert.match(before.breakdown?.components.contactability.reason ?? "", /email presence unknown/);
+  assert.equal(unmarked.score, before.score);
+});
+
 test("subscriber curve matches small-to-mid outreach range", () => {
-  assert.deepEqual(SCORE_CONFIG.weights, {
-    subRangeFit: 30,
-    engagementReach: 30,
-    mentionStrength: 15,
-    contactability: 10,
-    legacyEngagement: 15,
+  assert.deepEqual(SCORE_CONFIG.formulas.enriched, {
+    subRangeFit: 20,
+    engagementReach: 45,
+    mentionStrength: 20,
+    contactability: 15,
+  });
+  assert.deepEqual(SCORE_CONFIG.formulas.unenriched, {
+    subRangeFit: 20,
+    legacyEngagement: 45,
+    mentionStrength: 20,
+    contactability: 15,
   });
   assert.deepEqual(SCORE_CONFIG.subscribers, {
     floor: 5_000,
@@ -96,7 +124,7 @@ test("subscriber curve matches small-to-mid outreach range", () => {
   });
 });
 
-test("enriched activity contributes reach scoring and disables legacy engagement", () => {
+test("enriched activity uses the enriched /100 formula", () => {
   const result = scoreChannel(
     {
       kind: "creator",
@@ -117,9 +145,43 @@ test("enriched activity contributes reach scoring and disables legacy engagement
   );
 
   assert.ok(result.breakdown);
-  assert.ok(result.breakdown.components.engagementReach.points > 20);
+  assert.ok(result.breakdown.components.engagementReach.points > 30);
   assert.match(result.breakdown.components.engagementReach.reason, /reach/);
-  assert.equal(result.breakdown.components.legacyEngagement.points, 0);
+  assert.equal(result.breakdown.components.legacyEngagement, undefined);
+});
+
+test("enriched and unenriched formulas can both reach 100", () => {
+  const common = {
+    kind: "creator" as const,
+    subscriber_count: 100_000,
+    video_count: 100,
+    view_count: 2_000_000,
+    published_at: "2020-01-01T00:00:00.000Z",
+    discovered_via: "mention",
+    mention_count: 10,
+    raw_json: JSON.stringify({ email: "hello@example.com" }),
+  };
+  const now = new Date("2026-07-07T00:00:00Z");
+  const unenriched = scoreChannel(common, now);
+  const enriched = scoreChannel({
+    ...common,
+    enriched_at: "2026-07-07T00:00:00.000Z",
+    last_upload_at: "2026-07-01T00:00:00.000Z",
+    uploads_last_90d: 12,
+    median_recent_views: 60_000,
+    recent_velocity: 0.6,
+  }, now);
+
+  assert.equal(unenriched.score, 100);
+  assert.equal(enriched.score, 100);
+});
+
+test("reach credit preserves decent engagement and distinguishes elite reach", () => {
+  assert.equal(reachCreditScalar(0), 0);
+  assert.equal(reachCreditScalar(0.35), 0.85);
+  assert.ok(reachCreditScalar(0.5) > 0.85);
+  assert.equal(reachCreditScalar(0.6), 1);
+  assert.equal(reachCreditScalar(0.83), 1);
 });
 
 test("reach scoring decays inactive and tiny channels", () => {

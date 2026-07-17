@@ -44,8 +44,11 @@ export interface ChannelCardRow {
   enriched_at: string | null;
   recent_velocity: number | null;
   subs_growth_7d: number | null;
+  subs_growth_7d_days: number | null;
   subs_growth_30d: number | null;
+  subs_growth_30d_days: number | null;
   views_growth_30d: number | null;
+  views_growth_30d_days: number | null;
   tracking_days: number | null;
   first_snapshot_at: string | null;
   latest_snapshot_at: string | null;
@@ -84,8 +87,11 @@ export interface RawChannelRow {
   uploads_last_90d?: number | null;
   recent_velocity?: number | null;
   subs_growth_7d?: number | null;
+  subs_growth_7d_days?: number | null;
   subs_growth_30d?: number | null;
+  subs_growth_30d_days?: number | null;
   views_growth_30d?: number | null;
+  views_growth_30d_days?: number | null;
   tracking_days?: number | null;
   first_snapshot_at?: string | null;
   latest_snapshot_at?: string | null;

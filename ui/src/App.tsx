@@ -1767,13 +1767,9 @@ function BrandCard({
           {sponsorStats && (
             <CardStat
               label="sponsors"
-              value={sponsorStats.hasSignals ? `${Math.round(sponsorStats.rate * 100)}%` : "?"}
-              title={
-                sponsorStats.hasSignals
-                  ? `${sponsorStats.sponsoredCount} of ${sponsorStats.totalScanned} recent videos`
-                  : "scanned, no signals found. Unconfirmed, not unsponsored."
-              }
-              className={sponsorStats.hasSignals ? undefined : "muted-stat"}
+              value={sponsorStatValue(sponsorStats)}
+              title={sponsorStatTitle(sponsorStats)}
+              className={sponsorStats.state === "found" ? undefined : `muted-stat sponsor-${sponsorStats.state}`}
             />
           )}
         </div>
@@ -1904,13 +1900,9 @@ function ChannelCard({
           {sponsorStats && (
             <CardStat
               label="sponsors"
-              value={sponsorStats.hasSignals ? `${Math.round(sponsorStats.rate * 100)}%` : "?"}
-              title={
-                sponsorStats.hasSignals
-                  ? `${sponsorStats.sponsoredCount} of ${sponsorStats.totalScanned} recent videos`
-                  : "scanned, no signals found. Unconfirmed, not unsponsored."
-              }
-              className={sponsorStats.hasSignals ? undefined : "muted-stat"}
+              value={sponsorStatValue(sponsorStats)}
+              title={sponsorStatTitle(sponsorStats)}
+              className={sponsorStats.state === "found" ? undefined : `muted-stat sponsor-${sponsorStats.state}`}
             />
           )}
         </div>
@@ -2219,20 +2211,25 @@ function CardStat({ label, value, title, className }: { label: string; value: st
   );
 }
 
-function sponsorStatsForCard(channel: ChannelCardRow, scan?: SponsorScanSummary): {
+type SponsorCardState = "found" | "none" | "unscanned";
+
+interface SponsorCardStats {
   rate: number;
   sponsoredCount: number;
   totalScanned: number;
   lastSponsoredDate: string | null;
-  hasSignals: boolean;
-} | null {
-  if (scan && scan.scans.length > 0) {
+  state: SponsorCardState;
+}
+
+function sponsorStatsForCard(channel: ChannelCardRow, scan?: SponsorScanSummary): SponsorCardStats {
+  if (scan) {
+    const scanned = scan.totalScanned > 0 || scan.scans.length > 0;
     return {
       rate: scan.sponsorshipRate,
       sponsoredCount: scan.sponsoredCount,
       totalScanned: scan.totalScanned,
       lastSponsoredDate: scan.lastSponsoredDate,
-      hasSignals: scan.sponsoredCount > 0,
+      state: !scanned ? "unscanned" : scan.sponsoredCount > 0 ? "found" : "none",
     };
   }
 
@@ -2245,24 +2242,40 @@ function sponsorStatsFromRollup(channel: {
   sponsor_scan_total: number;
   last_sponsored_date: string | null;
   sponsor_scan_scanned_at?: string | null;
-}): {
-  rate: number;
-  sponsoredCount: number;
-  totalScanned: number;
-  lastSponsoredDate: string | null;
-  hasSignals: boolean;
-} | null {
+}): SponsorCardStats {
   if (channel.sponsor_scan_scanned_at && channel.sponsorship_rate !== null) {
     return {
       rate: channel.sponsorship_rate,
       sponsoredCount: channel.sponsor_scan_sponsored,
       totalScanned: channel.sponsor_scan_total,
       lastSponsoredDate: channel.last_sponsored_date,
-      hasSignals: channel.sponsor_scan_sponsored > 0,
+      state: channel.sponsor_scan_sponsored > 0 ? "found" : "none",
     };
   }
 
-  return null;
+  return {
+    rate: 0,
+    sponsoredCount: 0,
+    totalScanned: 0,
+    lastSponsoredDate: null,
+    state: "unscanned",
+  };
+}
+
+function sponsorStatValue(stats: SponsorCardStats): string {
+  if (stats.state === "found") return `${Math.round(stats.rate * 100)}%`;
+  if (stats.state === "none") return "NONE FOUND (SB)";
+  return "?";
+}
+
+function sponsorStatTitle(stats: SponsorCardStats): string {
+  if (stats.state === "found") {
+    return `${stats.sponsoredCount} of ${stats.totalScanned} recent videos have SponsorBlock segments`;
+  }
+  if (stats.state === "none") {
+    return "SponsorBlock community data found no submitted segments. Absence is not proof of no sponsors.";
+  }
+  return "No sponsor scan batch exists yet.";
 }
 
 function sponsorScanFresh(channel: { sponsor_scan_scanned_at?: string | null }): boolean {
@@ -2589,7 +2602,14 @@ function SeedCard({
 
 type GrowthRow = Pick<
   ChannelCardRow,
-  "subs_growth_7d" | "subs_growth_30d" | "views_growth_30d" | "tracking_days" | "snapshots"
+  | "subs_growth_7d"
+  | "subs_growth_7d_days"
+  | "subs_growth_30d"
+  | "subs_growth_30d_days"
+  | "views_growth_30d"
+  | "views_growth_30d_days"
+  | "tracking_days"
+  | "snapshots"
 >;
 
 function GrowthChips({ row }: { row: Partial<GrowthRow> }) {
@@ -2617,40 +2637,57 @@ function GrowthChipItems({ row }: { row: Partial<GrowthRow> }) {
   return (
     <>
       {row.subs_growth_7d !== null && row.subs_growth_7d !== undefined && (
-        <span className="chip growth-chip">SUBS 7D {formatPercent(row.subs_growth_7d)}</span>
+        <span className="chip growth-chip">{growthWindowLabel("SUBS", 7, row.subs_growth_7d_days)} {formatPercent(row.subs_growth_7d)}</span>
       )}
       {row.subs_growth_30d !== null && row.subs_growth_30d !== undefined && (
-        <span className="chip growth-chip">SUBS 30D {formatPercent(row.subs_growth_30d)}</span>
+        <span className="chip growth-chip">{growthWindowLabel("SUBS", 30, row.subs_growth_30d_days)} {formatPercent(row.subs_growth_30d)}</span>
       )}
       {row.views_growth_30d !== null && row.views_growth_30d !== undefined && (
-        <span className="chip growth-chip dim">VIEWS 30D {formatPercent(row.views_growth_30d)}</span>
+        <span className="chip growth-chip dim">{growthWindowLabel("VIEWS", 30, row.views_growth_30d_days)} {formatPercent(row.views_growth_30d)}</span>
       )}
     </>
   );
 }
 
 function Sparkline({ points }: { points: ChannelCardRow["snapshots"] }) {
-  const values = (points ?? [])
-    .map((point) => point.subscriber_count)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  if (values.length < 2) return null;
+  const plotted = (points ?? [])
+    .map((point) => ({
+      value: point.subscriber_count,
+      timestamp: Date.parse(point.taken_at),
+    }))
+    .filter((point): point is { value: number; timestamp: number } => (
+      typeof point.value === "number"
+      && Number.isFinite(point.value)
+      && Number.isFinite(point.timestamp)
+    ))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (plotted.length < 2) return null;
 
+  const values = plotted.map((point) => point.value);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = Math.max(1, max - min);
   const width = 160;
   const height = 34;
-  const step = values.length === 1 ? width : width / (values.length - 1);
-  const d = values.map((value, index) => {
-    const x = index * step;
-    const y = height - ((value - min) / range) * (height - 4) - 2;
+  const firstTime = plotted[0].timestamp;
+  const lastTime = plotted[plotted.length - 1].timestamp;
+  const timeRange = Math.max(1, lastTime - firstTime);
+  const d = plotted.map((point, index) => {
+    const x = ((point.timestamp - firstTime) / timeRange) * width;
+    const y = height - ((point.value - min) / range) * (height - 4) - 2;
     return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
   }).join(" ");
+  const netChange = values[0] > 0
+    ? ((values[values.length - 1] - values[0]) / values[0]) * 100
+    : 0;
 
   return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-      <path d={d} />
-    </svg>
+    <div className="sparkline-wrap" title={`Subscriber change over plotted span: ${formatPercent(netChange)}`}>
+      <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+        <path d={d} />
+      </svg>
+      <span className="sparkline-change">{formatPercent(netChange)}</span>
+    </div>
   );
 }
 
@@ -3468,6 +3505,17 @@ function sortChannels(channels: ChannelCardRow[], sort: SortMode): ChannelCardRo
 function formatPercent(value: number): string {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`;
+}
+
+function growthWindowLabel(
+  metric: "SUBS" | "VIEWS",
+  targetDays: number,
+  actualDays: number | null | undefined,
+): string {
+  const days = typeof actualDays === "number"
+    ? Math.min(targetDays, Math.max(0, actualDays))
+    : targetDays;
+  return `${metric} ${days}D`;
 }
 
 function scoreTier(score: number | null): string {

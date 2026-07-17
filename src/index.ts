@@ -3477,8 +3477,11 @@ async function growthMapForChannels(
 function growthFields(growth?: GrowthMetrics): Record<string, unknown> {
   return {
     subs_growth_7d: growth?.subs_growth_7d ?? null,
+    subs_growth_7d_days: growth?.subs_growth_7d_days ?? null,
     subs_growth_30d: growth?.subs_growth_30d ?? null,
+    subs_growth_30d_days: growth?.subs_growth_30d_days ?? null,
     views_growth_30d: growth?.views_growth_30d ?? null,
+    views_growth_30d_days: growth?.views_growth_30d_days ?? null,
     tracking_days: growth?.tracking_days ?? null,
     first_snapshot_at: growth?.first_snapshot_at ?? null,
     latest_snapshot_at: growth?.latest_snapshot_at ?? null,

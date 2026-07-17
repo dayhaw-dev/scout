@@ -29,6 +29,7 @@ type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
 type SortMode = "score" | "growth" | "wake" | "subs_desc" | "subs_asc";
 type SeedSortMode = "unmined" | "yield" | "latest_upload";
+type PoolDensity = "cards" | "rows";
 type GateState = "idle" | "checking" | "denied" | "success" | "cooldown";
 type ToastState = {
   message: string;
@@ -381,6 +382,9 @@ function StageView({
   const [titleFilter, setTitleFilter] = useState(initialFilters.titleFilter);
   const [sort, setSort] = useState<SortMode>(stage === "shortlist" ? "score" : initialFilters.sort);
   const [filtersOpen, setFiltersOpen] = useState(initialFilters.filtersOpen);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [density, setDensity] = useState<PoolDensity>(() => sessionStorage.getItem("scout_pool_density") === "rows" ? "rows" : "cards");
+  const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialFilters.searchQuery);
   const [uploadedWithin, setUploadedWithin] = useState("");
   const [searchMaxResolves, setSearchMaxResolves] = useState(10);
@@ -404,6 +408,11 @@ function StageView({
   const [sponsorScanTarget, setSponsorScanTarget] = useState<SponsorScanTarget | null>(null);
   const [scanningSponsorId, setScanningSponsorId] = useState<string | null>(null);
   const showPoolFilters = stage === "pool";
+
+  useEffect(() => {
+    if (!showPoolFilters) return;
+    sessionStorage.setItem("scout_pool_density", density);
+  }, [density, showPoolFilters]);
 
   useEffect(() => {
     if (!showPoolFilters) return;
@@ -563,6 +572,25 @@ function StageView({
       await load();
     }
   }
+
+  useEffect(() => {
+    if (!showPoolFilters || density !== "rows" || !focusedRowId) return;
+    const focusedChannel = visible.find((channel) => channel.channel_id === focusedRowId);
+    if (!focusedChannel) return;
+    const channel = focusedChannel;
+
+    function triageFocusedRow(event: KeyboardEvent) {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key !== "s" && key !== "x") return;
+      event.preventDefault();
+      setFocusedRowId(null);
+      void patchStatus(channel, key === "s" ? "shortlisted" : "rejected");
+    }
+
+    document.addEventListener("keydown", triageFocusedRow);
+    return () => document.removeEventListener("keydown", triageFocusedRow);
+  }, [density, focusedRowId, showPoolFilters, visible]);
 
   async function saveSnooze(channel: ChannelCardRow, input: SnoozeInput) {
     try {
@@ -921,119 +949,109 @@ function StageView({
     <section className="view">
       {showPoolFilters ? (
         <>
-          <form className="discovery-console clipped" onSubmit={(event) => void runPoolSearch(event)}>
-            <div className="discovery-field keyword-field">
-              <span className="field-label">KEYWORD</span>
+          <form className="discovery-console discovery-console-folded clipped" onSubmit={(event) => void runPoolSearch(event)}>
+            <div className="discovery-summary-row">
+              <span className="field-label">DISCOVERY</span>
               <div className="keyword-control">
                 <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="keyword discovery" />
                 <button className="primary" type="submit" disabled={bulk.active || !searchQuery.trim()}>
                   {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
                 </button>
               </div>
-            </div>
-            <label className="discovery-field">
-              <span className="field-label">UPLOADS</span>
-              <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
-                <option value="">any upload date</option>
-                <option value="today">today</option>
-                <option value="this_week">this week</option>
-                <option value="this_month">this month</option>
-                <option value="this_year">this year</option>
-              </select>
-            </label>
-            <label className="discovery-field">
-              <span className="field-label">MIN SUBS</span>
-              <input
-                type="number"
-                min={0}
-                max={100000000}
-                value={searchMinSubs}
-                onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
-              />
-            </label>
-            <label className="discovery-field">
-              <span className="field-label">RESOLVES</span>
-              <input
-                type="number"
-                min={1}
-                max={25}
-                value={searchMaxResolves}
-                onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
-              />
-            </label>
-            <div className="discovery-field toggle-field" title="expands search with 4 query variants">
-              <span className="field-label">DEEP</span>
-              <button
-                type="button"
-                className={`toggle-chip ${deepSearch ? "active" : ""}`}
-                aria-pressed={deepSearch}
-                onClick={() => setDeepSearch((value) => !value)}
-              >
-                DEEP
+              <span className="discovery-parameter-echo">
+                {searchParameterEcho(uploadedWithin, searchMinSubs, searchMaxResolves, deepSearch, autoEnrich, autoScan, searchCreditCapLabel)}
+              </span>
+              <span className="discovery-library-count">
+                {suggestions.length + contentSuggestions.length} topics / {searches.length} saved queries
+              </span>
+              <button className="discovery-expand" type="button" aria-expanded={discoveryOpen} onClick={() => setDiscoveryOpen((value) => !value)}>
+                {discoveryOpen ? "Collapse" : "Expand"}
               </button>
             </div>
-            <div className="discovery-field toggle-field" title="enrich new arrivals on landing">
-              <span className="field-label">AUTO-ENRICH</span>
-              <button
-                type="button"
-                className={`toggle-chip ${autoEnrich ? "active" : ""}`}
-                aria-pressed={autoEnrich}
-                onClick={() => setAutoEnrich((value) => !value)}
-              >
-                AUTO-ENRICH
-              </button>
-            </div>
-            <div className="discovery-field toggle-field" title="scan new arrivals for SponsorBlock signals">
-              <span className="field-label">AUTO-SCAN</span>
-              <button
-                type="button"
-                className={`toggle-chip ${autoScan ? "active" : ""}`}
-                aria-pressed={autoScan}
-                onClick={() => setAutoScan((value) => !value)}
-              >
-                AUTO-SCAN
-              </button>
-            </div>
-            <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
-              <span className="field-label">CAP</span>
-              <strong>{searchCreditCapLabel}</strong>
-            </div>
-            {deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
-              <div className="variant-row">
-                <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
-                {currentSanitizedVariants.variants.map((variant) => (
-                  <span className="suggestion-chip" key={variant}>
-                    <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
-                    <button
-                      className="suggestion-dismiss"
-                      type="button"
-                      aria-label={`Remove ${variant}`}
-                      title="Remove variant"
-                      onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}
-                    >
-                      x
+            {discoveryOpen && (
+              <div className="discovery-expanded">
+                <div className="discovery-control-row">
+                  <label className="discovery-field">
+                    <span className="field-label">UPLOADS</span>
+                    <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
+                      <option value="">any upload date</option>
+                      <option value="today">today</option>
+                      <option value="this_week">this week</option>
+                      <option value="this_month">this month</option>
+                      <option value="this_year">this year</option>
+                    </select>
+                  </label>
+                  <label className="discovery-field">
+                    <span className="field-label">MIN SUBS</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100000000}
+                      value={searchMinSubs}
+                      onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
+                    />
+                  </label>
+                  <label className="discovery-field">
+                    <span className="field-label">RESOLVES</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={25}
+                      value={searchMaxResolves}
+                      onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
+                    />
+                  </label>
+                  <div className="discovery-field toggle-field" title="expands search with 4 query variants">
+                    <span className="field-label">DEEP</span>
+                    <button type="button" className={`toggle-chip ${deepSearch ? "active" : ""}`} aria-pressed={deepSearch} onClick={() => setDeepSearch((value) => !value)}>
+                      DEEP
                     </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <SuggestionRows
-              topics={suggestions}
-              content={contentSuggestions}
-              onPick={setSearchQuery}
-              onDismiss={(term) => void dismissSuggestion(term)}
-              searchedTerms={searchedTerms}
-              onLowPool={onOpenSeeds}
-            />
-            <button className="recent-toggle" type="button" onClick={() => setRecentOpen((value) => !value)}>
-              Recent searches {recentOpen ? "hide" : "show"}
-            </button>
-            {recentOpen && (
-              <div className="recent-strip">
-                {searches.length === 0 ? (
-                  <span className="muted">No searches yet</span>
-                ) : (
-                  <SearchesTable searches={searches.slice(0, 6)} compact />
+                  </div>
+                  <div className="discovery-field toggle-field" title="enrich new arrivals on landing">
+                    <span className="field-label">AUTO-ENRICH</span>
+                    <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
+                      AUTO-ENRICH
+                    </button>
+                  </div>
+                  <div className="discovery-field toggle-field" title="scan new arrivals for SponsorBlock signals">
+                    <span className="field-label">AUTO-SCAN</span>
+                    <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
+                      AUTO-SCAN
+                    </button>
+                  </div>
+                  <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
+                    <span className="field-label">CAP</span>
+                    <strong>{searchCreditCapLabel}</strong>
+                  </div>
+                </div>
+                {deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
+                  <div className="variant-row">
+                    <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
+                    {currentSanitizedVariants.variants.map((variant) => (
+                      <span className="suggestion-chip" key={variant}>
+                        <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
+                        <button className="suggestion-dismiss" type="button" aria-label={`Remove ${variant}`} title="Remove variant" onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}>
+                          x
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <SuggestionRows
+                  topics={suggestions}
+                  content={contentSuggestions}
+                  onPick={setSearchQuery}
+                  onDismiss={(term) => void dismissSuggestion(term)}
+                  searchedTerms={searchedTerms}
+                  onLowPool={onOpenSeeds}
+                />
+                <button className="recent-toggle" type="button" onClick={() => setRecentOpen((value) => !value)}>
+                  Saved queries {recentOpen ? "hide" : "show"}
+                </button>
+                {recentOpen && (
+                  <div className="recent-strip">
+                    {searches.length === 0 ? <span className="muted">No saved queries yet</span> : <SearchesTable searches={searches.slice(0, 6)} compact />}
+                  </div>
                 )}
               </div>
             )}
@@ -1051,6 +1069,10 @@ function StageView({
             <button type="button" onClick={() => void enrichStage()} disabled={bulk.active || visible.length === 0}>
               Enrich max {Math.min(visible.length || 1, 30)}
             </button>
+            <div className="density-toggle" role="group" aria-label="Pool density">
+              <button type="button" className={density === "cards" ? "active" : ""} aria-pressed={density === "cards"} onClick={() => setDensity("cards")}>Cards</button>
+              <button type="button" className={density === "rows" ? "active" : ""} aria-pressed={density === "rows"} onClick={() => setDensity("rows")}>Rows</button>
+            </div>
             {filtersOpen && (
               <div className="filter-drawer">
                 <label>Min score<input type="number" value={minScore} onChange={(event) => setMinScore(Number(event.target.value))} /></label>
@@ -1090,6 +1112,14 @@ function StageView({
       )}
       {loading ? <Loading /> : visible.length === 0 ? (
         <EmptyState title={emptyTitle(stage)} detail={emptyDetail(stage)} />
+      ) : showPoolFilters && density === "rows" ? (
+        <ProspectRows
+          channels={visible}
+          focusedRowId={focusedRowId}
+          onFocusRow={setFocusedRowId}
+          onShortlist={(channel) => void patchStatus(channel, "shortlisted")}
+          onReject={(channel) => void patchStatus(channel, "rejected")}
+        />
       ) : (
         <div className="card-grid">
           {visible.map((channel) => (
@@ -2126,6 +2156,84 @@ function BrandCard({
   );
 }
 
+function ProspectRows({
+  channels,
+  focusedRowId,
+  onFocusRow,
+  onShortlist,
+  onReject,
+}: {
+  channels: ChannelCardRow[];
+  focusedRowId: string | null;
+  onFocusRow: (channelId: string) => void;
+  onShortlist: (channel: ChannelCardRow) => void;
+  onReject: (channel: ChannelCardRow) => void;
+}) {
+  return (
+    <div className="prospect-rows" role="table" aria-label="Pool prospects">
+      <div className="prospect-row prospect-row-head" role="row">
+        <span role="columnheader">Score</span>
+        <span role="columnheader">Channel</span>
+        <span role="columnheader">Provenance</span>
+        <span role="columnheader">Subs</span>
+        <span role="columnheader">V/Vid</span>
+        <span role="columnheader">Reach</span>
+        <span role="columnheader">Triage</span>
+      </div>
+      {channels.map((channel) => {
+        const reach = effectiveReach(channel);
+        const provenance = provenanceLine(channel, provenanceText(channel)).join(" · ") || "--";
+        return (
+          <div
+            className={`prospect-row prospect-row-data ${focusedRowId === channel.channel_id ? "focused" : ""}`}
+            role="row"
+            tabIndex={0}
+            aria-selected={focusedRowId === channel.channel_id}
+            key={channel.channel_id}
+            onFocus={() => onFocusRow(channel.channel_id)}
+            onClick={() => onFocusRow(channel.channel_id)}
+          >
+            <div role="cell"><ScoreTile channel={channel} compact /></div>
+            <div className="prospect-row-channel" role="cell">
+              <a href={`https://youtube.com/channel/${channel.channel_id}`} target="_blank" rel="noreferrer">{channel.title ?? channel.channel_id}</a>
+              <span>{channel.handle ? `@${channel.handle}` : ""}</span>
+            </div>
+            <div className="prospect-row-provenance" role="cell" title={provenance}>{provenance}</div>
+            <strong role="cell">{channel.subscriber_count === null ? "--" : compact(channel.subscriber_count)}</strong>
+            <strong role="cell">{channel.median_recent_views === null ? "--" : `~${compact(channel.median_recent_views)}`}</strong>
+            <strong className={reach >= 0.3 ? "signal-value" : ""} role="cell">{reach.toFixed(2)}</strong>
+            <div className="prospect-row-triage" role="cell">
+              <button type="button" onClick={(event) => { event.stopPropagation(); onShortlist(channel); }} title="Shortlist (S)">S</button>
+              <button type="button" className="reject-key" onClick={(event) => { event.stopPropagation(); onReject(channel); }} title="Reject (X)">X</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ScoreTile({ channel, compact: compactTile = false }: { channel: ChannelCardRow; compact?: boolean }) {
+  const [pinned, setPinned] = useState(false);
+  return (
+    <div className={`score-popover-anchor ${pinned ? "pinned" : ""}`}>
+      <button
+        className={`score score-${scoreTier(channel.score)} ${compactTile ? "score-compact" : ""}`}
+        type="button"
+        aria-expanded={pinned}
+        aria-label={`${channel.title ?? "Channel"} score ${channel.score?.toFixed(0) ?? "unscored"}; show decomposition`}
+        onClick={(event) => {
+          event.stopPropagation();
+          setPinned((value) => !value);
+        }}
+      >
+        {channel.score?.toFixed(0) ?? "--"}
+      </button>
+      <ScoreBreakdownPopover channel={channel} />
+    </div>
+  );
+}
+
 function ChannelCard({
   channel,
   onShortlist,
@@ -2173,7 +2281,6 @@ function ChannelCard({
   newArrival?: boolean;
   stale?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actions = cardActions({
     channel,
@@ -2199,16 +2306,15 @@ function ChannelCard({
   const secondaryActions = actions.filter((action) => action.visibleSecondary);
   const overflowActions = actions.filter((action) => !action.primary && !action.visibleSecondary);
   const provenance = provenanceText(channel);
-  const hasRecentViews = channel.median_recent_views !== null && channel.median_recent_views !== undefined;
   const provenanceItems = provenanceLine(channel, provenance);
   const footerDates = footerDateLine(channel);
   const showConfirmedEmail = channel.email_confirmed && !channel.email_present;
   const hasFooter = channel.contact_links.length > 0 || showConfirmedEmail || footerDates.length > 0;
   const sponsorStats = sponsorStatsForCard(channel, sponsorScan);
-  const hasStats = hasMetricValue(channel.subscriber_count) || hasRecentViews || Boolean(sponsorStats);
+  const reach = effectiveReach(channel);
 
   return (
-    <article className={`channel-card clipped ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
+    <article className={`channel-card prospect-card ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
       <div className="card-head">
         <ChannelImage
           src={channel.thumbnail_url}
@@ -2221,33 +2327,14 @@ function ChannelCard({
           </a>
           <div className="muted">{channel.handle ? `@${channel.handle}` : "no handle"}</div>
         </div>
-        <button
-          className={`score score-${scoreTier(channel.score)}`}
-          onClick={() => setOpen((value) => !value)}
-          title="click for breakdown"
-        >
-          {channel.score?.toFixed(0) ?? "--"}
-        </button>
+        <ScoreTile channel={channel} />
       </div>
-      {hasStats && (
-        <div className="stat-grid">
-          {hasMetricValue(channel.subscriber_count) && <CardStat label="subs" value={compact(channel.subscriber_count)} />}
-          {hasRecentViews && (
-            <>
-              <CardStat label="views / video" value={`~${compact(channel.median_recent_views)}`} title="median views across recent uploads" />
-              <CardStat label="reach" value={effectiveReach(channel).toFixed(2)} />
-            </>
-          )}
-          {sponsorStats && (
-            <CardStat
-              label="sponsors"
-              value={sponsorStatValue(sponsorStats)}
-              title={sponsorStatTitle(sponsorStats)}
-              className={sponsorStats.state === "found" ? undefined : `muted-stat sponsor-${sponsorStats.state}`}
-            />
-          )}
-        </div>
-      )}
+      <div className="stat-grid prospect-stat-grid">
+        <CardStat label="subs" value={channel.subscriber_count === null ? "--" : compact(channel.subscriber_count)} />
+        <CardStat label="v/vid" value={channel.median_recent_views === null ? "--" : `~${compact(channel.median_recent_views)}`} title="median views across recent uploads" />
+        <CardStat label="reach" value={reach.toFixed(2)} className={reach >= 0.3 ? "signal-stat" : undefined} />
+        <CardStat label="spons" value={compactSponsorStatValue(sponsorStats)} title={sponsorStatTitle(sponsorStats)} className={sponsorStats.state === "found" ? undefined : `muted-stat sponsor-${sponsorStats.state}`} />
+      </div>
       <div className="status-chip-row">
         {channel.kind === "brand" && <span className="chip badge-attribute kind-brand">BRAND</span>}
         {hotChannel(channel) && <span className="chip badge-alert hot-chip">HOT</span>}
@@ -2261,7 +2348,7 @@ function ChannelCard({
       </div>
       {provenanceItems.length > 0 && (
         <div className="provenance-line">
-          {provenanceItems.join(" / ")}
+          {provenanceItems.join(" · ")}
         </div>
       )}
       {channel.snooze_reason && (channel.status === "snoozed" || Boolean(channel.woke_at)) && (
@@ -2280,11 +2367,10 @@ function ChannelCard({
         <div className="card-footer">
           <IconLinks links={channel.contact_links} confirmedEmail={showConfirmedEmail} />
           {footerDates.length > 0 && (
-            <div className="footer-dates">{footerDates.join(" / ")}</div>
+            <div className={`footer-dates ${uploadAgeClass(channel.last_upload_at)}`}>{footerDates.join(" / ")}</div>
           )}
         </div>
       )}
-      {open && <ScoreTable breakdown={channel.score_breakdown} />}
       {snoozeOpen && onSnooze && (
         <SnoozeEditor
           channel={channel}
@@ -2661,9 +2747,31 @@ function provenanceLine(channel: ChannelCardRow, provenance: string | null): str
 
 function footerDateLine(channel: ChannelCardRow): string[] {
   const parts: string[] = [];
-  if (channel.last_upload_at) parts.push(`last upload ${daysAgo(channel.last_upload_at)}d ago`);
+  if (channel.last_upload_at) parts.push(`LAST UP ${daysAgo(channel.last_upload_at)}D`);
   if (channel.next_followup_at) parts.push(`follow up ${shortDate(channel.next_followup_at)}`);
   return parts;
+}
+
+function uploadAgeClass(lastUploadAt: string | null): string {
+  return lastUploadAt && daysAgo(lastUploadAt) > 30 ? "last-upload-stale" : "";
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A"].includes(target.tagName);
+}
+
+function searchParameterEcho(
+  uploadedWithin: string,
+  minSubs: number,
+  resolves: number,
+  deep: boolean,
+  autoEnrich: boolean,
+  autoScan: boolean,
+  cap: string,
+): string {
+  const uploads = uploadedWithin ? uploadedWithin.replace(/_/g, " ") : "any uploads";
+  return `${uploads} · min subs ${compact(minSubs)} · resolves ${resolves} · deep ${deep ? "on" : "off"} · auto-enrich ${autoEnrich ? "on" : "off"} · auto-scan ${autoScan ? "on" : "off"} · ${cap.toLowerCase()}`;
 }
 
 function CardStat({ label, value, title, className }: { label: string; value: string; title?: string; className?: string }) {
@@ -2730,6 +2838,10 @@ function sponsorStatValue(stats: SponsorCardStats): string {
   if (stats.state === "found") return `${Math.round(stats.rate * 100)}%`;
   if (stats.state === "none") return "NONE FOUND (SB)";
   return "?";
+}
+
+function compactSponsorStatValue(stats: SponsorCardStats): string {
+  return stats.state === "found" ? `${Math.round(stats.rate * 100)}%` : "—";
 }
 
 function sponsorStatTitle(stats: SponsorCardStats): string {
@@ -3727,27 +3839,36 @@ function SearchesTable({ searches, compact = false }: { searches: SearchRecord[]
   );
 }
 
-function ScoreTable({ breakdown }: { breakdown: ChannelCardRow["score_breakdown"] }) {
-  const components = breakdown?.components ?? {};
+function ScoreBreakdownPopover({ channel }: { channel: ChannelCardRow }) {
+  const breakdown = channel.score_breakdown;
+  const components = Object.entries(breakdown?.components ?? {});
   return (
-    <table className="score-table">
-      <tbody>
-        {Object.entries(components).map(([name, component]) => (
-          <tr key={name}>
-            <td>{scoreComponentLabel(name)}</td>
-            <td>{component.points?.toFixed(1) ?? "0"}/{component.weight ?? 0}</td>
-            <td>{component.reason ?? ""}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <aside className="score-popover" aria-label="Real score decomposition">
+      <div className="score-popover-head">
+        <strong>{channel.title ?? channel.channel_id} — {channel.score?.toFixed(0) ?? "--"}</strong>
+        <span>REAL SCORE</span>
+      </div>
+      {components.length === 0 ? (
+        <p>No score decomposition available.</p>
+      ) : components.map(([name, component]) => (
+        <div className="score-component" key={name}>
+          <div>
+            <span>{scoreComponentLabel(name)}</span>
+            <strong>{component.points?.toFixed(1) ?? "0.0"} / {component.weight ?? 0}</strong>
+          </div>
+          <progress max={component.weight ?? 1} value={component.points ?? 0} />
+          <small>{component.reason ?? ""}</small>
+        </div>
+      ))}
+      {(breakdown?.notes?.length ?? 0) > 0 && <div className="score-notes">{breakdown?.notes?.join(" · ")}</div>}
+    </aside>
   );
 }
 
 function scoreComponentLabel(name: string): string {
   const labels: Record<string, string> = {
-    subRangeFit: "subscriber range",
-    engagementReach: "recent views / reach",
+    subRangeFit: "subscriber fit",
+    engagementReach: "engagement + reach",
     mentionStrength: "mention strength",
     contactability: "contactability",
     legacyEngagement: "lifetime views / video",

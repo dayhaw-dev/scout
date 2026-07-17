@@ -216,11 +216,11 @@ test("enriched cards show median views as primary and reach as secondary", () =>
   const styles = readFileSync("ui/src/styles.css", "utf8");
   const score = readFileSync("src/lib/score.ts", "utf8");
   assert.match(app, /median_recent_views/);
-  assert.match(app, /label="views \/ video"/);
-  assert.match(app, /value=\{`~\$\{compact\(channel\.median_recent_views\)\}`\}/);
+  assert.match(app, /label="v\/vid"/);
+  assert.match(app, /channel\.median_recent_views === null \? "--" : `~\$\{compact\(channel\.median_recent_views\)\}`/);
   assert.match(app, /label="reach"/);
   assert.match(app, /median views across recent uploads/);
-  assert.match(app, /recent views \/ reach/);
+  assert.match(app, /engagement \+ reach/);
   assert.match(app, /lifetime views \/ video/);
   assert.match(styles, /\.stat-block/);
   assert.match(score, /median views\/video/);

@@ -66,6 +66,7 @@ export interface ChannelCardRow {
 
 export interface ScoreBreakdown {
   total?: number;
+  notes?: string[];
   components?: Record<
     string,
     {

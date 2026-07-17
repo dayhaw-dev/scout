@@ -74,6 +74,7 @@ import {
   CLOSED_OUTREACH_STATUSES,
   LIVE_OUTREACH_STATUSES,
   OUTREACH_STATUSES,
+  outreachSection,
   outreachSqlList,
   OutreachStatus,
 } from "./lib/outreach";
@@ -1390,9 +1391,20 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
 }
 
 async function outreach(env: Env): Promise<Response> {
-  const working = await outreachRows(env, "working");
-  const live = await outreachRows(env, "live");
-  const closed = await outreachRows(env, "closed");
+  const [workingRows, liveRows, closedRows] = await Promise.all([
+    outreachRows(env, "working"),
+    outreachRows(env, "live"),
+    outreachRows(env, "closed"),
+  ]);
+  const working = workingRows.filter(
+    (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "working",
+  );
+  const live = liveRows.filter(
+    (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "live",
+  );
+  const closed = closedRows.filter(
+    (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "closed",
+  );
   const growth = await growthMapForChannels(
     env,
     [...working, ...live, ...closed].map((row) => row.channel_id),
@@ -1412,8 +1424,8 @@ async function outreachRows(
   const clause = route === "working"
     ? "c.is_active = 1"
     : route === "closed"
-      ? `c.outreach_stage IN (${CLOSED_OUTREACH_SQL})`
-      : `c.outreach_stage IN (${LIVE_OUTREACH_SQL})`;
+      ? `c.is_active = 0 AND c.outreach_stage IN (${CLOSED_OUTREACH_SQL})`
+      : `c.is_active = 0 AND c.outreach_stage IN (${LIVE_OUTREACH_SQL})`;
   const order = route === "working"
     ? "LOWER(COALESCE(c.title, c.handle, c.channel_id)) ASC"
     : route === "closed"
@@ -2945,10 +2957,14 @@ async function status(env: Env): Promise<Response> {
     "SELECT COUNT(*) AS count FROM channels WHERE status = 'shortlisted' AND outreach_stage = 'none' AND is_active = 0",
   ).first<{ count: number }>();
   const outreachLiveCount = await env.SCOUT_DB.prepare(
-    `SELECT COUNT(*) AS count FROM channels WHERE outreach_stage IN (${LIVE_OUTREACH_SQL})`,
+    `SELECT COUNT(*) AS count FROM channels
+    WHERE is_active = 0
+      AND outreach_stage IN (${LIVE_OUTREACH_SQL})`,
   ).first<{ count: number }>();
   const outreachClosedCount = await env.SCOUT_DB.prepare(
-    `SELECT COUNT(*) AS count FROM channels WHERE outreach_stage IN (${CLOSED_OUTREACH_SQL})`,
+    `SELECT COUNT(*) AS count FROM channels
+    WHERE is_active = 0
+      AND outreach_stage IN (${CLOSED_OUTREACH_SQL})`,
   ).first<{ count: number }>();
   const activeRelationshipCount = await env.SCOUT_DB.prepare(
     "SELECT COUNT(*) AS count FROM channels WHERE is_active = 1",

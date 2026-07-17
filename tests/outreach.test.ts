@@ -41,6 +41,8 @@ test("worker exposes outreach list and log endpoints", () => {
   assert.match(source, /c\.last_touch_at ASC/);
   assert.match(source, /working: working\.map/);
   assert.match(source, /is_active = 1/);
+  assert.match(source, /c\.is_active = 0 AND c\.outreach_stage IN/);
+  assert.match(source, /WHERE is_active = 0\s+AND outreach_stage IN/);
 });
 
 test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status chips", () => {
@@ -51,6 +53,8 @@ test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status 
   assert.match(source, /<strong>Live<\/strong>/);
   assert.match(source, /"pitched"/);
   assert.match(source, /active-relationship-chip/);
+  assert.match(source, /channel\.is_active && <span className="chip active-relationship-chip">ACTIVE<\/span>/);
+  assert.match(source, /channel\.outreach_status && channel\.outreach_status !== "none"/);
   assert.match(source, /Mark ACTIVE \/ working with/);
   assert.match(source, /Log outreach/);
   assert.match(source, /Update status/);

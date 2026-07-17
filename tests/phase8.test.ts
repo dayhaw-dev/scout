@@ -146,17 +146,18 @@ test("seed list includes lifetime yield and sorts by yield descending", () => {
   assert.match(source, /WHERE resolved\.source_channel_id = c\.channel_id/);
   assert.match(source, /AS yield_count/);
   assert.match(source, /ORDER BY yield_count DESC/);
-  assert.match(app, /YIELD: \{seed\.yield_count \?\? 0\}/);
+  assert.match(app, /YIELD \{seed\.yield_count \?\? 0\}/);
   assert.match(api, /yield_count\?: number/);
 });
 
-test("phase 9 UI exposes snapshot growth states and mover thresholds", () => {
+test("phase 9 UI exposes snapshot growth states without a redundant mover badge", () => {
   const app = readFileSync("ui/src/App.tsx", "utf8");
   const config = readFileSync("ui/src/config.ts", "utf8");
   const api = readFileSync("ui/src/api.ts", "utf8");
   assert.match(app, /Snapshot now max/);
-  assert.match(app, /TRACKING/);
-  assert.match(app, /MOVER/);
+  assert.match(app, /NO TREND/);
+  assert.doesNotMatch(app, />TRACKING/);
+  assert.doesNotMatch(app, />MOVER</);
   assert.match(app, /function Sparkline/);
   assert.match(app, /growthWindowLabel/);
   assert.match(app, /point\.timestamp - firstTime/);

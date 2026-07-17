@@ -22,7 +22,7 @@ import {
   StatusPayload,
 } from "./api";
 import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
-import { HOT_CONFIG, MOVER_CONFIG, REACH_CONFIG } from "./config";
+import { HOT_CONFIG, REACH_CONFIG } from "./config";
 import { seedFreshnessPacingMs } from "./seed-freshness";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
@@ -1096,7 +1096,6 @@ function StageView({
             <ChannelCard
               key={channel.channel_id}
               channel={channel}
-              showStatus={stage !== "pool"}
               onShortlist={stage === "pool" || stage === "watchlist" ? () => void patchStatus(channel, "shortlisted") : undefined}
               onReject={stage !== "rejected" ? () => void patchStatus(channel, "rejected") : undefined}
               onToggleSeed={stage !== "rejected" && stage !== "snoozed" ? () => void toggleSeed(channel) : undefined}
@@ -1396,7 +1395,6 @@ function OutreachView({
             <ChannelCard
               key={channel.channel_id}
               channel={channel}
-              showStatus
               stale={isStaleOutreach(channel)}
               onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
               onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
@@ -1423,7 +1421,6 @@ function OutreachView({
             <ChannelCard
               key={channel.channel_id}
               channel={channel}
-              showStatus
               stale={isStaleOutreach(channel)}
               onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
               onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
@@ -1448,7 +1445,6 @@ function OutreachView({
               <ChannelCard
                 key={channel.channel_id}
                 channel={channel}
-                showStatus
                 onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
                 onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
                 onToggleSeed={!channel.seed_locked && channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
@@ -2106,8 +2102,8 @@ function BrandCard({
         </div>
       )}
       <div className="status-chip-row">
-        <span className="chip kind-brand">brand</span>
-        {brand.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
+        <span className="chip badge-attribute kind-brand">BRAND</span>
+        {brand.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
       </div>
       {brand.source_seed_title && (
         <div className="provenance-line">seed: {brand.source_seed_title}</div>
@@ -2132,7 +2128,6 @@ function BrandCard({
 
 function ChannelCard({
   channel,
-  showStatus = false,
   onShortlist,
   onReject,
   onToggleSeed,
@@ -2156,7 +2151,6 @@ function ChannelCard({
   stale = false,
 }: {
   channel: ChannelCardRow;
-  showStatus?: boolean;
   onShortlist?: () => void;
   onReject?: () => void;
   onToggleSeed?: () => void;
@@ -2205,7 +2199,6 @@ function ChannelCard({
   const secondaryActions = actions.filter((action) => action.visibleSecondary);
   const overflowActions = actions.filter((action) => !action.primary && !action.visibleSecondary);
   const provenance = provenanceText(channel);
-  const statusVisible = showStatus && !statusRedundantForTab(tab, channel.status);
   const hasRecentViews = channel.median_recent_views !== null && channel.median_recent_views !== undefined;
   const provenanceItems = provenanceLine(channel, provenance);
   const footerDates = footerDateLine(channel);
@@ -2256,16 +2249,13 @@ function ChannelCard({
         </div>
       )}
       <div className="status-chip-row">
-        <span className={`chip kind-chip kind-${channel.kind}`}>{channel.kind}</span>
-        {statusVisible && <span className="chip status-chip">{channel.status}</span>}
-        {hotChannel(channel) && <span className="chip hot-chip">HOT</span>}
-        {newArrival && <span className="chip new-chip">NEW</span>}
-        {moverChannel(channel) && <span className="chip mover-chip">MOVER</span>}
-        {stale && <span className="chip stale-chip">STALE</span>}
-        {channel.woke_at && channel.status === "candidate" && <span className="chip woke-chip">WOKE</span>}
-        {channel.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
-        {channel.outreach_status && channel.outreach_status !== "none" && (
-          <span className="chip outreach-chip">{outreachLabel(channel.outreach_status)}</span>
+        {channel.kind === "brand" && <span className="chip badge-attribute kind-brand">BRAND</span>}
+        {hotChannel(channel) && <span className="chip badge-alert hot-chip">HOT</span>}
+        {newArrival && <span className="chip badge-alert new-chip">NEW</span>}
+        {channel.woke_at && channel.status === "candidate" && <span className="chip badge-alert woke-chip">WOKE</span>}
+        {channel.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
+        {tab === "outreach" && channel.outreach_status && channel.outreach_status !== "none" && (
+          <span className="chip badge-stage outreach-chip">{outreachLabel(channel.outreach_status)}</span>
         )}
         <GrowthChipItems row={channel} />
       </div>
@@ -2653,16 +2643,6 @@ function cardActions({
   return actions;
 }
 
-function statusRedundantForTab(tab: Tab | undefined, status: ChannelStatus): boolean {
-  return (
-    (tab === "pool" && status === "candidate") ||
-    (tab === "shortlist" && status === "shortlisted") ||
-    (tab === "watchlist" && status === "watchlist") ||
-    (tab === "snoozed" && status === "snoozed") ||
-    (tab === "rejected" && status === "rejected")
-  );
-}
-
 function provenanceText(channel: ChannelCardRow): string | null {
   const parts: string[] = [];
   if (channel.source_seed_title) parts.push(`seed: ${channel.source_seed_title}`);
@@ -3039,11 +3019,9 @@ function SeedCard({
       </div>
       <div className="card-metrics">
         <span>{compact(seed.subscriber_count)} subs</span>
-        <span className="chip status-chip">{seed.status}</span>
-        <span className="chip">seed</span>
-        <span className="chip">YIELD: {seed.yield_count ?? 0}</span>
-        {seed.is_active && <span className="chip active-relationship-chip">ACTIVE</span>}
-        {seed.seed_locked && <span className="chip locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
+        <span className="seed-yield">YIELD {seed.yield_count ?? 0}</span>
+        {seed.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
+        {seed.seed_locked && <span className="chip badge-alert locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
         <SeedFreshnessChip freshness={seed.mining_freshness ?? null} />
       </div>
       <GrowthChips row={seed} />
@@ -3097,12 +3075,12 @@ function SeedCard({
 
 function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | null }) {
   if (!freshness) {
-    return <span className="chip freshness-chip freshness-pending">CHECKING</span>;
+    return <span className="chip badge-attribute freshness-chip freshness-pending">CHECKING</span>;
   }
   if (freshness.never_mined) {
     return (
       <span
-        className={`chip freshness-chip freshness-never ${freshness.stale ? "freshness-stale" : ""}`}
+        className={`chip badge-attribute freshness-chip freshness-never ${freshness.stale ? "freshness-stale" : ""}`}
         title={freshness.error ?? "This seed has no stored videos."}
       >
         NEVER MINED{freshness.stale ? " · STALE" : ""}
@@ -3110,11 +3088,11 @@ function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | nul
     );
   }
   if (freshness.status === "error") {
-    return <span className="chip freshness-chip freshness-error" title={freshness.error ?? undefined}>RSS ERROR</span>;
+    return <span className="chip badge-attribute freshness-chip freshness-error" title={freshness.error ?? undefined}>RSS ERROR</span>;
   }
   if (freshness.status === "empty") {
     return (
-      <span className={`chip freshness-chip freshness-pending ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
+      <span className={`chip badge-attribute freshness-chip freshness-pending ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
         NO RSS ENTRIES{freshness.stale ? " · STALE" : ""}
       </span>
     );
@@ -3122,7 +3100,7 @@ function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | nul
   if ((freshness.unmined_count ?? 0) > 0) {
     return (
       <span
-        className={`chip freshness-chip freshness-unmined ${freshness.stale ? "freshness-stale" : ""}`}
+        className={`chip badge-attribute freshness-chip freshness-unmined ${freshness.stale ? "freshness-stale" : ""}`}
         title={freshness.error ?? `Checked ${relativeTime(freshness.checked_at)} from ${freshness.rss_entry_count} RSS entries.`}
       >
         {freshness.unmined_count}{freshness.unmined_is_lower_bound ? "+" : ""} UNMINED{freshness.stale ? " · STALE" : ""}
@@ -3130,7 +3108,7 @@ function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | nul
     );
   }
   return (
-    <span className={`chip freshness-chip freshness-mined ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
+    <span className={`chip badge-attribute freshness-chip freshness-mined ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
       MINED{freshness.stale ? " · STALE" : ""}
     </span>
   );
@@ -3176,20 +3154,20 @@ function GrowthChipItems({ row }: { row: Partial<GrowthRow> }) {
   if (!hasGrowth) {
     if (snapshotCount === 0) return null;
     return (
-      <span className="chip tracking-chip">TRACKING ({row.tracking_days ?? 0}d)</span>
+      <span className="chip badge-attribute no-trend-chip">NO TREND</span>
     );
   }
 
   return (
     <>
       {row.subs_growth_7d !== null && row.subs_growth_7d !== undefined && (
-        <span className="chip growth-chip">{growthWindowLabel("SUBS", 7, row.subs_growth_7d_days)} {formatPercent(row.subs_growth_7d)}</span>
+        <span className="chip badge-attribute growth-chip">{growthWindowLabel("SUBS", 7, row.subs_growth_7d_days)} {formatPercent(row.subs_growth_7d)}</span>
       )}
       {row.subs_growth_30d !== null && row.subs_growth_30d !== undefined && (
-        <span className="chip growth-chip">{growthWindowLabel("SUBS", 30, row.subs_growth_30d_days)} {formatPercent(row.subs_growth_30d)}</span>
+        <span className="chip badge-attribute growth-chip">{growthWindowLabel("SUBS", 30, row.subs_growth_30d_days)} {formatPercent(row.subs_growth_30d)}</span>
       )}
       {row.views_growth_30d !== null && row.views_growth_30d !== undefined && (
-        <span className="chip growth-chip dim">{growthWindowLabel("VIEWS", 30, row.views_growth_30d_days)} {formatPercent(row.views_growth_30d)}</span>
+        <span className="chip badge-attribute growth-chip dim">{growthWindowLabel("VIEWS", 30, row.views_growth_30d_days)} {formatPercent(row.views_growth_30d)}</span>
       )}
     </>
   );
@@ -4140,8 +4118,8 @@ function growthWindowLabel(
 
 function scoreTier(score: number | null): string {
   if (score === null) return "low";
-  if (score >= 60) return "high";
-  if (score >= 45) return "mid";
+  if (score >= 70) return "high";
+  if (score >= 55) return "mid";
   return "low";
 }
 
@@ -4285,13 +4263,6 @@ function hotChannel(channel: ChannelCardRow): boolean {
     (channel.subscriber_count ?? 0) >= HOT_CONFIG.minSubscribers &&
     effectiveReach(channel) >= HOT_CONFIG.minReach &&
     daysAgo(channel.last_upload_at ?? "") <= HOT_CONFIG.maxLastUploadDays
-  );
-}
-
-function moverChannel(channel: ChannelCardRow): boolean {
-  return (
-    (channel.subs_growth_7d ?? Number.NEGATIVE_INFINITY) >= MOVER_CONFIG.subsGrowth7d ||
-    (channel.subs_growth_30d ?? Number.NEGATIVE_INFINITY) >= MOVER_CONFIG.subsGrowth30d
   );
 }
 

@@ -720,17 +720,17 @@ a:hover {
 }
 
 .score-mid {
-  color: #e6f7fb;
-  background: #172840;
-  border-color: rgba(230, 247, 251, 0.36);
-  box-shadow: 0 0 0 2px rgba(230, 247, 251, 0.05);
+  color: #67e8f9;
+  background: rgba(7, 17, 31, 0.44);
+  border-color: rgba(34, 211, 238, 0.72);
+  box-shadow: none;
 }
 
 .score-low {
-  color: #cfe7ef;
-  background: #101927;
-  border-color: rgba(143, 180, 196, 0.22);
-  box-shadow: 0 0 0 2px rgba(143, 180, 196, 0.03);
+  color: #9bc4d2;
+  background: rgba(10, 18, 32, 0.4);
+  border-color: rgba(143, 180, 196, 0.16);
+  box-shadow: none;
 }
 
 .brand-score {
@@ -918,26 +918,15 @@ a:hover {
   background: #22d3ee;
 }
 
-.status-chip {
-  border-color: rgba(34, 211, 238, 0.42);
-  color: #67e8f9;
-}
-
 .kind-brand {
-  border-color: rgba(248, 113, 113, 0.46);
-  color: #fecaca;
+  border-color: rgba(216, 180, 254, 0.2);
+  color: #ad9fbd;
 }
 
 .hot-chip {
   color: #07111f;
   background: #22d3ee;
   border-color: #22d3ee;
-}
-
-.mover-chip {
-  color: #07111f;
-  background: #e6f7fb;
-  border-color: #e6f7fb;
 }
 
 .new-chip {
@@ -947,20 +936,15 @@ a:hover {
 }
 
 .outreach-chip {
-  border-color: rgba(14, 165, 233, 0.42);
-  color: #bfdbfe;
-  background: rgba(8, 47, 73, 0.44);
+  border-color: rgba(34, 211, 238, 0.58);
+  color: #67e8f9;
+  background: rgba(8, 47, 73, 0.36);
 }
 
 .active-relationship-chip {
-  border-color: rgba(52, 211, 153, 0.65);
-  color: #d1fae5;
-  background: rgba(6, 78, 59, 0.58);
-}
-
-.stale-chip {
-  border-color: rgba(248, 113, 113, 0.62);
-  color: #fecaca;
+  border-color: rgba(52, 211, 153, 0.2);
+  color: #8bafa5;
+  background: rgba(6, 78, 59, 0.18);
 }
 
 .woke-chip {
@@ -1065,8 +1049,7 @@ a:hover {
 }
 
 .chip,
-.growth-chip,
-.tracking-chip {
+.growth-chip {
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -1082,18 +1065,18 @@ a:hover {
 }
 
 .growth-chip {
-  border-color: rgba(34, 211, 238, 0.42);
-  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.18);
+  color: #86aebc;
 }
 
 .growth-chip.dim,
-.tracking-chip {
+.no-trend-chip {
   color: #9bc4d2;
 }
 
-.tracking-chip {
-  border-color: rgba(148, 163, 184, 0.35);
-  background: rgba(15, 23, 42, 0.55);
+.no-trend-chip {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.34);
 }
 
 .locked-chip {
@@ -1103,20 +1086,20 @@ a:hover {
 }
 
 .freshness-chip {
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .freshness-unmined,
 .freshness-never {
-  border-color: rgba(251, 146, 60, 0.55);
-  background: rgba(124, 45, 18, 0.38);
-  color: #fdba74;
+  border-color: rgba(251, 146, 60, 0.2);
+  background: rgba(124, 45, 18, 0.16);
+  color: #b79a83;
 }
 
 .freshness-never {
-  border-color: rgba(248, 113, 113, 0.58);
-  background: rgba(127, 29, 29, 0.34);
-  color: #fecaca;
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.34);
+  color: #8fa7b0;
 }
 
 .freshness-mined,
@@ -1127,9 +1110,9 @@ a:hover {
 }
 
 .freshness-error {
-  border-color: rgba(248, 113, 113, 0.5);
-  background: rgba(69, 10, 10, 0.38);
-  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.2);
+  background: rgba(69, 10, 10, 0.18);
+  color: #b18f94;
 }
 
 .freshness-stale {
@@ -1176,6 +1159,61 @@ a:hover {
   color: #b8d7e1;
   padding: 5px 8px;
   font-size: 12px;
+  text-transform: uppercase;
+}
+
+.chip.badge-stage {
+  border-color: rgba(34, 211, 238, 0.58);
+  background: rgba(8, 47, 73, 0.36);
+  color: #67e8f9;
+  font-weight: 700;
+}
+
+.chip.badge-alert {
+  font-weight: 800;
+  letter-spacing: 0.035em;
+}
+
+.chip.badge-attribute {
+  border-color: rgba(143, 180, 196, 0.18);
+  background: rgba(10, 18, 32, 0.42);
+  color: #86a3ae;
+  font-weight: 500;
+}
+
+.chip.hot-chip,
+.chip.new-chip {
+  border-color: #22d3ee;
+  background: #22d3ee;
+  color: #07111f;
+}
+
+.chip.woke-chip {
+  border-color: rgba(103, 232, 249, 0.62);
+  background: rgba(8, 47, 73, 0.5);
+  color: #bff6ff;
+}
+
+.chip.locked-chip {
+  border-color: rgba(250, 204, 21, 0.58);
+  background: rgba(113, 63, 18, 0.42);
+  color: #fde68a;
+}
+
+.chip.kind-brand {
+  border-color: rgba(216, 180, 254, 0.2);
+  color: #ad9fbd;
+}
+
+.chip.active-relationship-chip {
+  border-color: rgba(52, 211, 153, 0.2);
+  background: rgba(6, 78, 59, 0.18);
+  color: #8bafa5;
+}
+
+.seed-yield {
+  color: #7898a6;
+  font-size: 11px;
   text-transform: uppercase;
 }
 

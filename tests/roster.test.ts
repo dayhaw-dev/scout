@@ -170,9 +170,9 @@ test("UI exposes active controls only through Outreach and keeps badges everywhe
   assert.match(source, /if \(onToggleActive && tab === "outreach"\)/);
   assert.doesNotMatch(source, /toggleSeedActive/);
   assert.doesNotMatch(source, /onToggleActive=\{stage/);
-  assert.match(source, /seed\.is_active && <span className="chip active-relationship-chip">ACTIVE<\/span>/);
-  assert.match(source, /channel\.is_active && <span className="chip active-relationship-chip">ACTIVE<\/span>/);
-  assert.match(source, /brand\.is_active && <span className="chip active-relationship-chip">ACTIVE<\/span>/);
+  assert.match(source, /seed\.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE<\/span>/);
+  assert.match(source, /channel\.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE<\/span>/);
+  assert.match(source, /brand\.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE<\/span>/);
 });
 
 function apiRequest(

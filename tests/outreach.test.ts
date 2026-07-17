@@ -53,7 +53,7 @@ test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status 
   assert.match(source, /<strong>Live<\/strong>/);
   assert.match(source, /"pitched"/);
   assert.match(source, /active-relationship-chip/);
-  assert.match(source, /channel\.is_active && <span className="chip active-relationship-chip">ACTIVE<\/span>/);
+  assert.match(source, /channel\.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE<\/span>/);
   assert.match(source, /channel\.outreach_status && channel\.outreach_status !== "none"/);
   assert.match(source, /Mark ACTIVE \/ working with/);
   assert.match(source, /Log outreach/);
@@ -86,7 +86,8 @@ test("ui card actions use one primary action and overflow for secondary actions"
   assert.match(source, /closeOnEscape/);
   assert.match(source, /overflow-trigger/);
   assert.match(source, /overflow-portal/);
-  assert.match(source, /statusRedundantForTab/);
+  assert.doesNotMatch(source, /statusRedundantForTab/);
+  assert.match(source, /tab === "outreach" && channel\.outreach_status/);
   assert.match(source, /provenanceText/);
   assert.match(styles, /\.action-overflow/);
   assert.match(styles, /\.overflow-portal/);

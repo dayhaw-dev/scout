@@ -2901,7 +2901,9 @@ function sponsorStatValue(stats: SponsorCardStats): string {
 }
 
 function compactSponsorStatValue(stats: SponsorCardStats): string {
-  return stats.state === "found" ? `${Math.round(stats.rate * 100)}%` : "—";
+  if (stats.state === "found") return `${Math.round(stats.rate * 100)}%`;
+  if (stats.state === "none") return "\u2014";
+  return "?";
 }
 
 function sponsorStatTitle(stats: SponsorCardStats): string {
@@ -3269,8 +3271,11 @@ function SeedOreTile({ freshness }: { freshness: SeedMiningFreshness | null }) {
   if (freshness.status === "error") return <div className="seed-ore-tile ore-error" title={freshness.error ?? undefined}><strong>!</strong><span>RSS ERROR</span></div>;
   if (freshness.status === "empty") return <div className="seed-ore-tile ore-pending"><strong>0</strong><span>NO RSS</span></div>;
   const count = freshness.unmined_count ?? 0;
+  const title = freshness.error ?? (count > 0
+    ? "Recent RSS uploads not present in stored expansion videos. Includes Shorts; this is upload ore, not a channel count."
+    : "All recent RSS uploads are represented in stored expansion videos.");
   return (
-    <div className={`seed-ore-tile ${count >= 8 ? "ore-high" : count > 0 ? "ore-low" : "ore-mined"}`} title={freshness.error ?? undefined}>
+    <div className={`seed-ore-tile ${count >= 8 ? "ore-high" : count > 0 ? "ore-low" : "ore-mined"}`} title={title}>
       <strong>{count}{freshness.unmined_is_lower_bound ? "+" : ""}</strong>
       <span>{count > 0 ? "UNMINED" : "MINED"}{freshness.stale ? " · STALE" : ""}</span>
     </div>

@@ -187,6 +187,7 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(api, /refreshSeedFreshness\(channelId: string, force = false\)/);
   assert.match(app, /Check freshness/);
   assert.match(app, /15\+|unmined_is_lower_bound/);
+  assert.match(app, /upload ore, not a channel count/);
   assert.match(app, /Unmined desc/);
   assert.match(app, /NEVER MINED/);
   assert.match(app, /seedFreshnessPacingMs/);

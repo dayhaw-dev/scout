@@ -193,6 +193,7 @@ test("frontend exposes sponsor scan action, modal, and result chip", () => {
   assert.match(app, /type SponsorCardState = "found" \| "none" \| "unscanned"/);
   assert.match(app, /return "NONE FOUND \(SB\)"/);
   assert.match(app, /return "\?"/);
+  assert.match(app, /function compactSponsorStatValue[\s\S]*?state === "none"\) return "\\u2014";[\s\S]*?return "\?";/);
   assert.match(app, /Absence is not proof of no sponsors/);
   assert.match(app, /No sponsor scan batch exists yet/);
   assert.match(app, /muted-stat/);

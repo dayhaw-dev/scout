@@ -2237,6 +2237,28 @@ a:hover {
   font-size: 9px;
 }
 
+.prospect-card.pool-card .prospect-stat-grid .stat-block strong {
+  color: #f4fbff;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.prospect-card.pool-card .prospect-stat-grid .stat-block span {
+  color: #587888;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.055em;
+}
+
+.prospect-card.pool-card .prospect-stat-grid .stat-block.signal-stat strong {
+  color: #22d3ee;
+}
+
+.prospect-card.pool-card .prospect-stat-grid .stat-block.muted-stat strong {
+  color: #9bc4d2;
+}
+
 .prospect-card .status-chip-row {
   min-height: 18px;
   gap: 4px;

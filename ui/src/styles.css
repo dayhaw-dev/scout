@@ -492,12 +492,6 @@ a:hover {
   min-height: 38px;
 }
 
-.discovery-query-variants {
-  grid-column: 1 / -1;
-  min-width: 0;
-  padding-top: 2px;
-}
-
 .toggle-chip {
   display: inline-flex;
   align-items: center;
@@ -2267,7 +2261,7 @@ a:hover {
 
 .discovery-summary-row {
   display: grid;
-  grid-template-columns: auto minmax(320px, 0.9fr) minmax(300px, 1.2fr) auto auto;
+  grid-template-columns: auto minmax(320px, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -2278,7 +2272,6 @@ a:hover {
   min-width: 0;
 }
 
-.discovery-parameter-echo,
 .discovery-library-count {
   min-width: 0;
   overflow: hidden;
@@ -2298,6 +2291,93 @@ a:hover {
   min-width: 90px;
 }
 
+.discovery-variant-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px 8px;
+  border-top: 1px solid #0e2c42;
+}
+
+.discovery-variant-label {
+  padding-top: 7px;
+  color: #7fa5c2;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.055em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.discovery-variant-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.discovery-variant-chips .suggestion-chip button {
+  min-height: 30px;
+  padding-block: 5px;
+}
+
+.discovery-control-row-always {
+  grid-template-columns:
+    minmax(154px, 1.3fr)
+    minmax(108px, 0.8fr)
+    minmax(96px, 0.72fr)
+    minmax(90px, 0.7fr)
+    minmax(132px, 1fr)
+    minmax(122px, 0.92fr)
+    minmax(116px, 0.88fr);
+  gap: 6px;
+  padding: 7px 10px 9px;
+  border-top: 1px solid #0e2c42;
+  background: transparent;
+}
+
+.discovery-control-row-always .discovery-field {
+  min-width: 0;
+  min-height: 0;
+  gap: 4px;
+}
+
+.discovery-control-row-always .discovery-field .field-label {
+  color: #7fa5c2;
+  font-size: 9px;
+  letter-spacing: 0.075em;
+}
+
+.discovery-control-row-always .discovery-field input,
+.discovery-control-row-always .discovery-field select,
+.discovery-control-row-always .discovery-field .toggle-chip,
+.discovery-control-row-always .discovery-field.cap-field strong {
+  min-height: 34px;
+  padding-inline: 9px;
+  border-color: #16435f;
+  background: transparent;
+  color: #e8f5ff;
+  font-size: 11px;
+  line-height: 1;
+  clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 0 100%);
+}
+
+.discovery-control-row-always .uploads-field select,
+.discovery-control-row-always .cap-field strong {
+  white-space: nowrap;
+}
+
+.discovery-control-row-always .toggle-chip.active {
+  border-color: #17d9ff;
+  background: #17d9ff;
+  color: #040a14;
+  box-shadow: none;
+}
+
 .discovery-expanded {
   display: grid;
   gap: 10px;
@@ -2306,36 +2386,8 @@ a:hover {
   background: rgba(7, 17, 31, 0.46);
 }
 
-.discovery-expanded .discovery-control-row {
-  grid-template-columns: repeat(7, minmax(110px, 1fr));
-}
-
-.discovery-expanded .discovery-field {
-  min-height: 66px;
-  padding: 8px;
-  border: 1px solid rgba(34, 211, 238, 0.16);
-  background: transparent;
-}
-
-.discovery-expanded .discovery-field .field-label {
-  color: #6f93a3;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-}
-
-.discovery-expanded .discovery-field input,
-.discovery-expanded .discovery-field select,
-.discovery-expanded .discovery-field .toggle-chip,
-.discovery-expanded .discovery-field.cap-field strong {
-  min-height: 34px;
-  border-color: rgba(34, 211, 238, 0.2);
-  background: #07111f;
-  clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 0 100%);
-}
-
-.discovery-expanded .discovery-field .toggle-chip.active {
-  border-color: #22d3ee;
-  background: #22d3ee;
+.discovery-libraries {
+  padding: 9px 10px 10px;
 }
 
 .density-toggle {
@@ -3283,7 +3335,6 @@ a:hover {
   }
 
   .discovery-summary-row > .field-label,
-  .discovery-parameter-echo,
   .discovery-library-count {
     display: none;
   }
@@ -3319,16 +3370,23 @@ a:hover {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
+  .discovery-control-row-always {
+    grid-template-columns:
+      minmax(154px, 1.3fr)
+      minmax(108px, 0.8fr)
+      minmax(96px, 0.72fr)
+      minmax(90px, 0.7fr)
+      minmax(132px, 1fr)
+      minmax(122px, 0.92fr)
+      minmax(116px, 0.88fr);
+  }
+
   .discovery-summary-row {
-    grid-template-columns: auto minmax(280px, 1fr) minmax(220px, 0.8fr) auto;
+    grid-template-columns: auto minmax(280px, 1fr) auto;
   }
 
   .discovery-library-count {
     display: none;
-  }
-
-  .discovery-expanded .discovery-control-row {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
   .discovery-library-tools {
@@ -3353,6 +3411,12 @@ a:hover {
   }
 }
 
+@media (max-width: 980px) {
+  .discovery-control-row-always {
+    grid-template-columns: repeat(4, minmax(120px, 1fr));
+  }
+}
+
 @media (max-width: 720px) {
   .discovery-console {
     grid-template-columns: 1fr;
@@ -3363,13 +3427,24 @@ a:hover {
   }
 
   .discovery-summary-row > .field-label,
-  .discovery-parameter-echo,
   .discovery-library-count {
     display: none;
   }
 
   .keyword-control {
     grid-template-columns: 1fr;
+  }
+
+  .discovery-variant-row {
+    grid-template-columns: 1fr;
+  }
+
+  .discovery-variant-label {
+    padding-top: 0;
+  }
+
+  .discovery-control-row-always {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .discovery-library-summary > div {

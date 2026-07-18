@@ -981,23 +981,7 @@ function StageView({
                 <button className="primary" type="submit" disabled={bulk.active || !searchQuery.trim()}>
                   {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
                 </button>
-                {discoveryOpen && deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
-                  <div className="variant-row discovery-query-variants">
-                    <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
-                    {currentSanitizedVariants.variants.map((variant) => (
-                      <span className="suggestion-chip" key={variant}>
-                        <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
-                        <button className="suggestion-dismiss" type="button" aria-label={`Remove ${variant}`} title="Remove variant" onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}>
-                          x
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
-              <span className="discovery-parameter-echo">
-                {searchParameterEcho(uploadedWithin, searchMinSubs, searchMaxResolves, deepSearch, autoEnrich, autoScan, searchCreditCapLabel)}
-              </span>
               <span className="discovery-library-count">
                 {suggestions.length + contentSuggestions.length} topics / {searches.length} saved queries
               </span>
@@ -1013,62 +997,79 @@ function StageView({
                 {discoveryOpen ? "Collapse" : "Expand"}
               </button>
             </div>
-            {discoveryOpen && (
-              <div className="discovery-expanded">
-                <div className="discovery-control-row">
-                  <label className="discovery-field">
-                    <span className="field-label">UPLOADS</span>
-                    <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
-                      <option value="">any upload date</option>
-                      <option value="today">today</option>
-                      <option value="this_week">this week</option>
-                      <option value="this_month">this month</option>
-                      <option value="this_year">this year</option>
-                    </select>
-                  </label>
-                  <label className="discovery-field">
-                    <span className="field-label">MIN SUBS</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100000000}
-                      value={searchMinSubs}
-                      onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
-                    />
-                  </label>
-                  <label className="discovery-field">
-                    <span className="field-label">RESOLVES</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={25}
-                      value={searchMaxResolves}
-                      onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
-                    />
-                  </label>
-                  <div className="discovery-field toggle-field" title="expands search with 4 query variants">
-                    <span className="field-label">DEEP</span>
-                    <button type="button" className={`toggle-chip ${deepSearch ? "active" : ""}`} aria-pressed={deepSearch} onClick={() => setDeepSearch((value) => !value)}>
-                      DEEP
-                    </button>
-                  </div>
-                  <div className="discovery-field toggle-field" title="enrich new arrivals on landing">
-                    <span className="field-label">AUTO-ENRICH</span>
-                    <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
-                      AUTO-ENRICH
-                    </button>
-                  </div>
-                  <div className="discovery-field toggle-field" title="scan new arrivals for SponsorBlock signals">
-                    <span className="field-label">AUTO-SCAN</span>
-                    <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
-                      AUTO-SCAN
-                    </button>
-                  </div>
-                  <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
-                    <span className="field-label">CAP</span>
-                    <strong>{searchCreditCapLabel}</strong>
-                  </div>
+            {deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
+              <div className="discovery-variant-row">
+                <span className="discovery-variant-label">
+                  {deepVariantsLoading ? "VARIANTS / ..." : `VARIANTS / ${deepVariantSource ?? "LLM"}`}
+                </span>
+                <div className="discovery-variant-chips">
+                  {currentSanitizedVariants.variants.map((variant) => (
+                    <span className="suggestion-chip" key={variant}>
+                      <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
+                      <button className="suggestion-dismiss" type="button" aria-label={`Remove ${variant}`} title="Remove variant" onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}>
+                        x
+                      </button>
+                    </span>
+                  ))}
                 </div>
+              </div>
+            )}
+            <div className="discovery-control-row discovery-control-row-always">
+              <label className="discovery-field uploads-field">
+                <span className="field-label">UPLOADS</span>
+                <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
+                  <option value="">any upload date</option>
+                  <option value="today">today</option>
+                  <option value="this_week">this week</option>
+                  <option value="this_month">this month</option>
+                  <option value="this_year">this year</option>
+                </select>
+              </label>
+              <label className="discovery-field min-subs-field">
+                <span className="field-label">MIN SUBS</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000000}
+                  value={searchMinSubs}
+                  onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
+                />
+              </label>
+              <label className="discovery-field resolves-field">
+                <span className="field-label">RESOLVES</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={25}
+                  value={searchMaxResolves}
+                  onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
+                />
+              </label>
+              <div className="discovery-field toggle-field deep-field" title="expands search with 4 query variants">
+                <span className="field-label">DEEP</span>
+                <button type="button" className={`toggle-chip ${deepSearch ? "active" : ""}`} aria-pressed={deepSearch} onClick={() => setDeepSearch((value) => !value)}>
+                  DEEP
+                </button>
+              </div>
+              <div className="discovery-field toggle-field auto-enrich-field" title="enrich new arrivals on landing">
+                <span className="field-label">AUTO-ENRICH</span>
+                <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
+                  AUTO-ENRICH
+                </button>
+              </div>
+              <div className="discovery-field toggle-field auto-scan-field" title="scan new arrivals for SponsorBlock signals">
+                <span className="field-label">AUTO-SCAN</span>
+                <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
+                  AUTO-SCAN
+                </button>
+              </div>
+              <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
+                <span className="field-label">CAP</span>
+                <strong>{searchCreditCapLabel}</strong>
+              </div>
+            </div>
+            {discoveryOpen && (
+              <div className="discovery-expanded discovery-libraries">
                 <SuggestionRows
                   topics={suggestions}
                   content={contentSuggestions}
@@ -2870,19 +2871,6 @@ function uploadAgeClass(lastUploadAt: string | null): string {
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A"].includes(target.tagName);
-}
-
-function searchParameterEcho(
-  uploadedWithin: string,
-  minSubs: number,
-  resolves: number,
-  deep: boolean,
-  autoEnrich: boolean,
-  autoScan: boolean,
-  cap: string,
-): string {
-  const uploads = uploadedWithin ? uploadedWithin.replace(/_/g, " ") : "any uploads";
-  return `${uploads} · min subs ${compact(minSubs)} · resolves ${resolves} · deep ${deep ? "on" : "off"} · auto-enrich ${autoEnrich ? "on" : "off"} · auto-scan ${autoScan ? "on" : "off"} · ${cap.toLowerCase()}`;
 }
 
 function CardStat({ label, value, title, className }: { label: string; value: string; title?: string; className?: string }) {

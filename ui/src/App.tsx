@@ -2604,6 +2604,24 @@ function OverflowMenu({ actions }: { actions: CardAction[] }) {
     };
   }, [open]);
 
+  const groupedActions = [
+    {
+      label: "Pipeline",
+      actions: actions.filter((action) => ["watchlist", "wake", "back-pool", "restore-pool", "snooze", "reject"].includes(action.key)),
+    },
+    {
+      label: "Identity",
+      actions: actions.filter((action) => ["seed", "kind", "email-confirmed", "active-relationship"].includes(action.key)),
+    },
+    {
+      label: "Intelligence",
+      actions: actions.filter((action) => ["enrich", "sponsor-scan"].includes(action.key)),
+    },
+  ].filter((group) => group.actions.length > 0);
+  const groupedKeys = new Set(groupedActions.flatMap((group) => group.actions.map((action) => action.key)));
+  const remainingActions = actions.filter((action) => !groupedKeys.has(action.key));
+  if (remainingActions.length > 0) groupedActions.push({ label: "Actions", actions: remainingActions });
+
   return (
     <div className="action-overflow">
       <button
@@ -2623,21 +2641,27 @@ function OverflowMenu({ actions }: { actions: CardAction[] }) {
       </button>
       {open && anchor && createPortal(
         <div className="overflow-list overflow-portal" ref={setMenuNode} role="menu">
-          {actions.map((action) => (
-            <button
-              key={action.key}
-              className={action.className}
-              onClick={() => {
-                if (action.disabled) return;
-                setOpen(false);
-                action.onClick();
-              }}
-              title={action.title}
-              disabled={action.disabled}
-              role="menuitem"
-            >
-              {action.label}
-            </button>
+          {groupedActions.map((group) => (
+            <div className="overflow-group" key={group.label} role="presentation">
+              <div className="overflow-group-label">{group.label}</div>
+              {group.actions.map((action) => (
+                <button
+                  key={action.key}
+                  className={`overflow-menu-item overflow-action-${action.key} ${action.className ?? ""}`}
+                  onClick={() => {
+                    if (action.disabled) return;
+                    setOpen(false);
+                    action.onClick();
+                  }}
+                  title={action.title}
+                  disabled={action.disabled}
+                  role="menuitem"
+                >
+                  <span>{action.label}</span>
+                  {action.disabled && action.title && <small>{action.title}</small>}
+                </button>
+              ))}
+            </div>
           ))}
         </div>,
         document.body,

@@ -907,15 +907,28 @@ a:hover {
 
 .primary-action {
   color: #07111f;
-  background: #22d3ee;
-  border-color: #22d3ee;
+  background: #17d9ff;
+  border-color: #17d9ff;
+  font-weight: 800;
   box-shadow: none;
 }
 
 .secondary-action {
-  border-color: rgba(248, 113, 113, 0.42);
-  color: #fecaca;
+  border-color: rgba(235, 95, 112, 0.42);
+  color: #d98994;
   background: transparent;
+  box-shadow: none;
+}
+
+.primary-action:hover {
+  border-color: #67e8f9;
+  box-shadow: 0 0 12px rgba(23, 217, 255, 0.12);
+}
+
+.secondary-action:hover {
+  border-color: rgba(235, 95, 112, 0.72);
+  color: #f2a4ae;
+  background: rgba(82, 24, 34, 0.16);
   box-shadow: none;
 }
 
@@ -947,18 +960,72 @@ a:hover {
   bottom: calc(100% + 7px);
   z-index: 10;
   display: grid;
-  gap: 6px;
-  min-width: 150px;
-  padding: 8px;
-  border: 1px solid rgba(34, 211, 238, 0.34);
-  background: #07111f;
-  box-shadow: 0 0 22px rgba(34, 211, 238, 0.14);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  gap: 0;
+  min-width: 216px;
+  padding: 6px;
+  border: 1px solid #16435f;
+  background: rgba(2, 6, 13, 0.98);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.5), 0 0 18px rgba(23, 217, 255, 0.08);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
 }
 
 .overflow-list button {
   width: 100%;
   justify-content: flex-start;
+}
+
+.overflow-group + .overflow-group {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(22, 67, 95, 0.72);
+}
+
+.overflow-group-label {
+  padding: 3px 8px 4px;
+  color: #587888;
+  font-family: var(--font-display);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.overflow-list .overflow-menu-item {
+  min-height: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 0;
+  border-left: 1px solid transparent;
+  background: transparent;
+  color: #a8c6d2;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: left;
+  clip-path: none;
+  box-shadow: none;
+}
+
+.overflow-list .overflow-menu-item:hover:not(:disabled) {
+  border-left-color: #17d9ff;
+  background: rgba(23, 217, 255, 0.07);
+  color: #e8f8ff;
+  box-shadow: none;
+}
+
+.overflow-list .overflow-menu-item:disabled {
+  opacity: 1;
+  color: #496a79;
+  cursor: not-allowed;
+}
+
+.overflow-list .overflow-menu-item small {
+  color: #3f5f6d;
+  font-size: 8px;
+  font-weight: 400;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
 }
 
 .overflow-portal {
@@ -967,7 +1034,7 @@ a:hover {
   right: var(--menu-right);
   bottom: auto;
   z-index: 1000;
-  min-width: 168px;
+  min-width: 216px;
   transform: translateY(calc(-100% - 7px));
 }
 
@@ -2176,17 +2243,17 @@ a:hover {
 }
 
 .prospect-card .card-head {
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 7px;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 9px;
 }
 
 .prospect-card .card-head img,
 .prospect-card .thumb-fallback {
-  width: 30px;
-  height: 30px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   clip-path: none;
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .prospect-card .channel-title {
@@ -2307,6 +2374,14 @@ a:hover {
 
 .prospect-card .card-actions {
   padding-top: 0;
+}
+
+.prospect-card .primary-action {
+  flex: 1 1 auto;
+}
+
+.prospect-card .secondary-action {
+  flex: 0 0 auto;
 }
 
 .score-popover-anchor {

@@ -32,5 +32,14 @@ test("Pool cards emphasize stat values and restore contained thumbnails", () => 
   assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block strong \{[\s\S]*?color: #f4fbff;[\s\S]*?font-size: 17px;[\s\S]*?font-weight: 800;/);
   assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block span \{[\s\S]*?color: #587888;[\s\S]*?font-size: 9px;/);
   assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block\.signal-stat strong \{[\s\S]*?color: #22d3ee;/);
-  assert.match(styles, /\.prospect-card \.card-head img,[\s\S]*?width: 30px;[\s\S]*?height: 30px;[\s\S]*?border-radius: 50%;/);
+  assert.match(styles, /\.prospect-card \.card-head \{[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\) auto;/);
+  assert.match(styles, /\.prospect-card \.card-head img,[\s\S]*?width: 48px;[\s\S]*?height: 48px;[\s\S]*?border-radius: 50%;/);
+});
+
+test("prospect actions and overflow follow the GENEOS hierarchy", () => {
+  assert.match(styles, /\.primary-action \{[\s\S]*?background: #17d9ff;[\s\S]*?font-weight: 800;/);
+  assert.match(styles, /\.secondary-action \{[\s\S]*?color: #d98994;[\s\S]*?background: transparent;/);
+  assert.match(styles, /\.overflow-list \{[\s\S]*?border: 1px solid #16435f;[\s\S]*?background: rgba\(2, 6, 13, 0\.98\);/);
+  assert.match(app, /label: "Pipeline"[\s\S]*?label: "Identity"[\s\S]*?label: "Intelligence"/);
+  assert.match(app, /action\.disabled && action\.title && <small>\{action\.title\}<\/small>/);
 });

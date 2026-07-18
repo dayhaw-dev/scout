@@ -43,8 +43,15 @@ test("prospect headers truncate uniformly and action baselines ignore optional c
   assert.match(styles, /\.prospect-card \.channel-title \{[\s\S]*?font-size: 16px;[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;/);
   assert.match(styles, /\.prospect-card \.card-identity \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
   assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?margin-top: auto;[\s\S]*?gap: 6px;[\s\S]*?justify-content: flex-start;/);
-  assert.match(styles, /\.prospect-card \.primary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?width: auto;[\s\S]*?padding-inline: 14px;/);
-  assert.match(styles, /\.prospect-card \.secondary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?width: auto;[\s\S]*?padding-inline: 12px;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action,[\s\S]*?flex: 0 0 max-content;[\s\S]*?align-self: flex-start;[\s\S]*?width: max-content;[\s\S]*?white-space: nowrap;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action \{[\s\S]*?padding-inline: 14px;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.secondary-action \{[\s\S]*?padding-inline: 12px;/);
+});
+
+test("every non-Pool primary action uses the same max-content card button", () => {
+  assert.match(app, /label: updateOutreach \? "Update status" : "Log outreach"[\s\S]*?primary: tab === "shortlist" \|\| tab === "outreach"/);
+  assert.match(app, /label: "Wake now"[\s\S]*?primary: tab === "snoozed"/);
+  assert.ok((app.match(/tab="outreach"/g) ?? []).length >= 3, "ACTIVE, LIVE, and CLOSED Outreach cards share the outreach tab contract");
 });
 
 test("Eyes Peeled keeps its growth chips, NO TREND state, and sparkline inside the shared card", () => {

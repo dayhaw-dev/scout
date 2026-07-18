@@ -25,9 +25,16 @@ test("discovery console folds to one line and restores controls plus query sourc
   assert.match(app, /searchParameterEcho\(/);
   assert.match(app, /aria-expanded=\{discoveryOpen\}/);
   assert.match(app, /<SuggestionRows/);
-  assert.match(app, /Saved queries \{recentOpen \? "hide" : "show"\}/);
+  assert.match(app, /<SavedSearchesPanel searches=\{searches\} \/>/);
+  assert.match(app, /label="TOPICS"/);
+  assert.match(app, /label="CONTENT"/);
+  assert.match(app, /const \[hideSearched, setHideSearched\] = useState\(true\)/);
+  assert.match(app, /aria-label=\{`Filter \$\{label\.toLowerCase\(\)\}`\}/);
+  assert.match(app, /aria-label="Filter saved searches"/);
   assert.match(styles, /\.discovery-summary-row/);
   assert.match(styles, /\.discovery-expanded/);
+  assert.match(styles, /\.discovery-chip-viewport,[\s\S]*?max-height: 176px;[\s\S]*?overflow: auto;/);
+  assert.match(styles, /\.discovery-expanded \.discovery-field \{[\s\S]*?border: 1px solid[\s\S]*?background: transparent;/);
 });
 
 test("Pool density toggle provides 40px rows and guarded S-X triage", () => {

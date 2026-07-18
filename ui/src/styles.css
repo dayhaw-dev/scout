@@ -1484,7 +1484,125 @@ a:hover {
 .suggestion-rows {
   flex-basis: 100%;
   display: grid;
-  gap: 6px;
+  gap: 8px;
+}
+
+.discovery-library-panel {
+  min-width: 0;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  background: transparent;
+}
+
+.discovery-library-summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 10px;
+}
+
+.discovery-library-summary > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.discovery-library-summary strong {
+  color: #bff6ff;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.discovery-library-summary span {
+  overflow: hidden;
+  color: #6f93a3;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.discovery-library-summary button {
+  flex: 0 0 auto;
+  min-width: 62px;
+  padding-block: 5px;
+  color: #9bdbe6;
+  background: transparent;
+}
+
+.discovery-library-body {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px 10px;
+  border-top: 1px solid rgba(34, 211, 238, 0.12);
+  background: rgba(2, 6, 13, 0.22);
+}
+
+.discovery-library-tools {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.discovery-library-tools label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.discovery-library-tools input {
+  width: 100%;
+  min-width: 0;
+}
+
+.discovery-library-tools > span {
+  padding-bottom: 9px;
+  color: #6f93a3;
+  font-size: 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.searched-visibility-toggle {
+  min-width: 132px;
+  color: #8fb4c4;
+  background: transparent;
+}
+
+.searched-visibility-toggle.active {
+  border-color: rgba(34, 211, 238, 0.48);
+  color: #bff6ff;
+}
+
+.discovery-chip-viewport,
+.saved-search-viewport {
+  max-height: 176px;
+  overflow: auto;
+  scrollbar-color: rgba(34, 211, 238, 0.34) #07111f;
+}
+
+.discovery-chip-viewport {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 7px;
+  padding: 2px 4px 2px 0;
+}
+
+.saved-search-viewport {
+  border-top: 1px solid rgba(34, 211, 238, 0.08);
+}
+
+.saved-search-viewport .data-table {
+  margin-top: 0;
+}
+
+.saved-search-tools {
+  grid-template-columns: minmax(220px, 1fr) auto;
 }
 
 .channel-card.new-arrival {
@@ -2182,6 +2300,34 @@ a:hover {
   grid-template-columns: repeat(7, minmax(110px, 1fr));
 }
 
+.discovery-expanded .discovery-field {
+  min-height: 66px;
+  padding: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  background: transparent;
+}
+
+.discovery-expanded .discovery-field .field-label {
+  color: #6f93a3;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.discovery-expanded .discovery-field input,
+.discovery-expanded .discovery-field select,
+.discovery-expanded .discovery-field .toggle-chip,
+.discovery-expanded .discovery-field.cap-field strong {
+  min-height: 34px;
+  border-color: rgba(34, 211, 238, 0.2);
+  background: #07111f;
+  clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 0 100%);
+}
+
+.discovery-expanded .discovery-field .toggle-chip.active {
+  border-color: #22d3ee;
+  background: #22d3ee;
+}
+
 .density-toggle {
   display: inline-flex;
   margin-left: auto;
@@ -2389,17 +2535,21 @@ a:hover {
   justify-content: flex-start;
 }
 
-.prospect-card .primary-action {
-  flex: 0 0 auto;
-  width: auto;
+.prospect-card .card-actions > .primary-action,
+.prospect-card .card-actions > .secondary-action {
+  display: inline-flex;
+  flex: 0 0 max-content;
+  align-self: flex-start;
+  width: max-content;
   max-width: 100%;
+  white-space: nowrap;
+}
+
+.prospect-card .card-actions > .primary-action {
   padding-inline: 14px;
 }
 
-.prospect-card .secondary-action {
-  flex: 0 0 auto;
-  width: auto;
-  max-width: 100%;
+.prospect-card .card-actions > .secondary-action {
   padding-inline: 12px;
 }
 
@@ -3095,6 +3245,10 @@ a:hover {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
+  .discovery-library-tools {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   .prospect-rows {
     overflow-x: auto;
   }
@@ -3130,6 +3284,24 @@ a:hover {
 
   .keyword-control {
     grid-template-columns: 1fr;
+  }
+
+  .discovery-library-summary > div {
+    display: grid;
+    gap: 3px;
+  }
+
+  .discovery-library-tools,
+  .saved-search-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .discovery-library-tools > button {
+    justify-self: start;
+  }
+
+  .discovery-library-tools > span {
+    padding-bottom: 0;
   }
 
   .outreach-field {

@@ -414,7 +414,6 @@ function StageView({
   const [deepVariants, setDeepVariants] = useState<string[]>([]);
   const [deepVariantsLoading, setDeepVariantsLoading] = useState(false);
   const [deepVariantSource, setDeepVariantSource] = useState<"llm" | "mixed" | "fallback" | null>(null);
-  const [recentOpen, setRecentOpen] = useState(false);
   const [highlightIds, setHighlightIds] = useState<Set<string>>(() => new Set());
   const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(() => new Set());
   const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
@@ -1059,14 +1058,7 @@ function StageView({
                   searchedTerms={searchedTerms}
                   onLowPool={onOpenSeeds}
                 />
-                <button className="recent-toggle" type="button" onClick={() => setRecentOpen((value) => !value)}>
-                  Saved queries {recentOpen ? "hide" : "show"}
-                </button>
-                {recentOpen && (
-                  <div className="recent-strip">
-                    {searches.length === 0 ? <span className="muted">No saved queries yet</span> : <SearchesTable searches={searches.slice(0, 6)} compact />}
-                  </div>
-                )}
+                <SavedSearchesPanel searches={searches} />
               </div>
             )}
           </form>
@@ -3514,28 +3506,6 @@ function RunSummary({ summary }: { summary: SearchSummary }) {
   );
 }
 
-function LegacySuggestionRows({
-  topics,
-  content,
-  onPick,
-  onDismiss,
-  searchedTerms,
-}: {
-  topics: SearchSuggestion[];
-  content: SearchSuggestion[];
-  onPick: (term: string) => void;
-  onDismiss: (term: string) => void;
-  searchedTerms: Set<string>;
-}) {
-  if (topics.length === 0 && content.length === 0) return null;
-  return (
-    <div className="suggestion-rows">
-      <SuggestionRow label="TOPICS" suggestions={topics} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
-      <SuggestionRow label="CONTENT" suggestions={content} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
-    </div>
-  );
-}
-
 function SuggestionRows({
   topics,
   content,
@@ -3551,48 +3521,134 @@ function SuggestionRows({
   searchedTerms: Set<string>;
   onLowPool: () => void;
 }) {
-  const [searchedOpen, setSearchedOpen] = useState(false);
   const topicGroups = splitSearchedSuggestions(topics, searchedTerms);
   const contentGroups = splitSearchedSuggestions(content, searchedTerms);
-  const searchedSuggestions = uniqueSuggestions([
-    ...topicGroups.searched,
-    ...contentGroups.searched,
-  ]);
   const unsearchedCount = topicGroups.unsearched.length + contentGroups.unsearched.length;
-
-  if (topics.length === 0 && content.length === 0) {
-    return (
-      <div className="suggestion-rows">
-        <QueryPoolPrompt onOpenSeeds={onLowPool} />
-      </div>
-    );
-  }
 
   return (
     <div className="suggestion-rows">
-      <DiscoverySuggestionRow label="TOPICS" suggestions={topicGroups.unsearched} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
-      <DiscoverySuggestionRow label="CONTENT" suggestions={contentGroups.unsearched} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
-      {searchedSuggestions.length > 0 && (
-        <div className="suggestions searched-collapse">
-          <span className={`suggestion-chip searched-summary ${searchedOpen ? "active" : ""}`}>
-            <button type="button" onClick={() => setSearchedOpen((value) => !value)}>
-              {searchedSuggestions.length} searched
-            </button>
-          </span>
-          {searchedOpen && searchedSuggestions.map((suggestion) => (
-            <DiscoverySuggestionChip
-              key={`searched-${suggestion.term}`}
-              suggestion={suggestion}
-              label="SEARCHED"
-              searched
-              onPick={onPick}
-              onDismiss={onDismiss}
-            />
-          ))}
-        </div>
-      )}
+      <DiscoverySuggestionPanel label="TOPICS" suggestions={topics} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
+      <DiscoverySuggestionPanel label="CONTENT" suggestions={content} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
       {unsearchedCount < 5 && <QueryPoolPrompt onOpenSeeds={onLowPool} />}
     </div>
+  );
+}
+
+function DiscoverySuggestionPanel({
+  label,
+  suggestions,
+  onPick,
+  onDismiss,
+  searchedTerms,
+}: {
+  label: "TOPICS" | "CONTENT";
+  suggestions: SearchSuggestion[];
+  onPick: (term: string) => void;
+  onDismiss: (term: string) => void;
+  searchedTerms: Set<string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [hideSearched, setHideSearched] = useState(true);
+  const searchedCount = suggestions.filter((suggestion) => searchedTerms.has(normalizeChipTerm(suggestion.term))).length;
+  const normalizedFilter = normalizeChipTerm(filter);
+  const visibleSuggestions = suggestions.filter((suggestion) => {
+    const searched = searchedTerms.has(normalizeChipTerm(suggestion.term));
+    if (hideSearched && searched) return false;
+    return !normalizedFilter || normalizeChipTerm(suggestion.term).includes(normalizedFilter);
+  });
+
+  return (
+    <section className="discovery-library-panel">
+      <div className="discovery-library-summary">
+        <div>
+          <strong>{label}</strong>
+          <span>{suggestions.length} available{searchedCount > 0 ? ` / ${searchedCount} searched` : ""}</span>
+        </div>
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={suggestions.length === 0}>
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+      {open && (
+        <div className="discovery-library-body">
+          <div className="discovery-library-tools">
+            <label>
+              <span className="field-label">FILTER {label}</span>
+              <input
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder={`find ${label.toLowerCase().replace("content", "query")}`}
+                aria-label={`Filter ${label.toLowerCase()}`}
+              />
+            </label>
+            <button
+              className={`searched-visibility-toggle ${hideSearched ? "" : "active"}`}
+              type="button"
+              aria-pressed={!hideSearched}
+              onClick={() => setHideSearched((value) => !value)}
+              disabled={searchedCount === 0}
+            >
+              {searchedCount === 0 ? "No searched" : hideSearched ? `Show searched (${searchedCount})` : "Hide searched"}
+            </button>
+            <span>{visibleSuggestions.length} shown</span>
+          </div>
+          <div className="discovery-chip-viewport">
+            {visibleSuggestions.length === 0 ? (
+              <span className="muted">No matching {label.toLowerCase()}.</span>
+            ) : visibleSuggestions.map((suggestion) => (
+              <DiscoverySuggestionChip
+                key={`${label}-${suggestion.term}`}
+                suggestion={suggestion}
+                label={label}
+                searched={searchedTerms.has(normalizeChipTerm(suggestion.term))}
+                onPick={onPick}
+                onDismiss={onDismiss}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SavedSearchesPanel({ searches }: { searches: SearchRecord[] }) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const normalizedFilter = normalizeChipTerm(filter);
+  const visibleSearches = searches.filter((search) => !normalizedFilter || normalizeChipTerm(search.query).includes(normalizedFilter));
+
+  return (
+    <section className="discovery-library-panel saved-searches-panel">
+      <div className="discovery-library-summary">
+        <div>
+          <strong>SAVED SEARCHES</strong>
+          <span>{searches.length} executed</span>
+        </div>
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={searches.length === 0}>
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+      {open && (
+        <div className="discovery-library-body">
+          <div className="discovery-library-tools saved-search-tools">
+            <label>
+              <span className="field-label">FILTER SAVED SEARCHES</span>
+              <input
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder="find executed query"
+                aria-label="Filter saved searches"
+              />
+            </label>
+            <span>{visibleSearches.length} shown</span>
+          </div>
+          <div className="saved-search-viewport">
+            {visibleSearches.length === 0 ? <span className="muted">No matching saved searches.</span> : <SearchesTable searches={visibleSearches} compact />}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -3607,18 +3663,6 @@ function splitSearchedSuggestions(suggestions: SearchSuggestion[], searchedTerms
   }, { searched: [], unsearched: [] });
 }
 
-function uniqueSuggestions(suggestions: SearchSuggestion[]) {
-  const seen = new Set<string>();
-  const unique: SearchSuggestion[] = [];
-  for (const suggestion of suggestions) {
-    const key = normalizeChipTerm(suggestion.term);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(suggestion);
-  }
-  return unique;
-}
-
 function QueryPoolPrompt({ onOpenSeeds }: { onOpenSeeds: () => void }) {
   return (
     <div className="suggestions">
@@ -3627,37 +3671,6 @@ function QueryPoolPrompt({ onOpenSeeds }: { onOpenSeeds: () => void }) {
           Query pool low. Regen from seeds
         </button>
       </span>
-    </div>
-  );
-}
-
-function DiscoverySuggestionRow({
-  label: text,
-  suggestions,
-  onPick,
-  onDismiss,
-  searchedTerms,
-}: {
-  label: string;
-  suggestions: SearchSuggestion[];
-  onPick: (term: string) => void;
-  onDismiss: (term: string) => void;
-  searchedTerms: Set<string>;
-}) {
-  if (suggestions.length === 0) return null;
-  return (
-    <div className="suggestions">
-      <span>{text}</span>
-      {suggestions.slice(0, 12).map((suggestion) => (
-        <DiscoverySuggestionChip
-          key={`${text}-${suggestion.term}`}
-          suggestion={suggestion}
-          label={text}
-          searched={searchedTerms.has(normalizeChipTerm(suggestion.term))}
-          onPick={onPick}
-          onDismiss={onDismiss}
-        />
-      ))}
     </div>
   );
 }

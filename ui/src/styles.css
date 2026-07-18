@@ -415,7 +415,7 @@ a:hover {
 }
 
 .pool-view {
-  gap: 4px;
+  gap: 0;
 }
 
 .toolbar,
@@ -2385,6 +2385,7 @@ a:hover {
   padding: 0;
   background: transparent;
   border-color: rgba(34, 211, 238, 0.18);
+  border-bottom: 0;
 }
 
 .discovery-summary-row {
@@ -2587,9 +2588,10 @@ a:hover {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  margin-bottom: -3px;
+  margin-bottom: -1px;
   padding: 7px 10px;
   border: 1px solid #0e2c42;
+  border-top: 0;
   background: transparent;
 }
 

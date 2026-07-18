@@ -51,8 +51,8 @@ test("Pool subheader restores live context, filter count, and quiet system contr
   assert.match(app, /FILTERS \(\{activeFilterCount\}\)/);
   assert.doesNotMatch(app, /FILTERS \{filtersOpen \? "OPEN" : "CLOSED"\}/);
   assert.match(app, /aria-label="Pool sort"/);
-  assert.match(styles, /\.pool-view \{\s*gap: 8px;/);
-  assert.match(styles, /\.pool-toolbar \{[\s\S]*?border: 1px solid #0e2c42;[\s\S]*?background: transparent;/);
+  assert.match(styles, /\.pool-view \{\s*gap: 4px;/);
+  assert.match(styles, /\.pool-toolbar \{[\s\S]*?margin-bottom: -3px;[\s\S]*?border: 1px solid #0e2c42;[\s\S]*?background: transparent;/);
   assert.match(styles, /\.pool-toolbar > button,[\s\S]*?min-height: 32px;[\s\S]*?border-color: #16435f;/);
   assert.match(styles, /\.pool-toolbar \.density-toggle button\.active \{[\s\S]*?border-bottom: 2px solid #17d9ff;/);
 });

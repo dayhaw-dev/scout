@@ -9,6 +9,7 @@
   --card-action-border: rgb(23 217 255 / 42%);
   --card-action-text: #f4fbff;
   --state-fill: rgb(23 217 255 / 6%);
+  --surface-strong: #0b1d30;
   --border-muted: #0e2c42;
   --text-primary: #e8f5ff;
   --text-muted: #7fa5c2;
@@ -414,7 +415,7 @@ a:hover {
 }
 
 .pool-view {
-  gap: 8px;
+  gap: 4px;
 }
 
 .toolbar,
@@ -2586,6 +2587,7 @@ a:hover {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  margin-bottom: -3px;
   padding: 7px 10px;
   border: 1px solid #0e2c42;
   background: transparent;
@@ -2668,6 +2670,7 @@ a:hover {
   background: transparent;
   padding: 9px 11px 10px;
   gap: 4px;
+  box-shadow: 0 6px 14px rgb(0 0 0 / 16%);
 }
 
 .prospect-card::before,
@@ -2687,7 +2690,7 @@ a:hover {
 .prospect-card::after {
   inset: 1px;
   z-index: -1;
-  background: #0a1220;
+  background: var(--surface-strong);
 }
 
 .prospect-card:hover {

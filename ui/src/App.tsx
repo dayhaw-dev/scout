@@ -959,9 +959,18 @@ function StageView({
   const currentSearchMaxCost = searchPlanMaxCost(currentSearchPlan.queries.length, currentSearchPlan.maxResolves, autoEnrich);
   const searchCreditCap = deepSearch ? 40 : null;
   const searchCreditCapLabel = searchCreditCap && searchCreditCap > 0 ? `${searchCreditCap} credits` : "NO CAP";
+  const activeFilterCount = [
+    minScore > 0,
+    Boolean(minSubs),
+    Boolean(maxSubs),
+    kinds.length !== 1 || kinds[0] !== "creator",
+    source !== "all",
+    Boolean(titleFilter.trim()),
+  ].filter(Boolean).length;
+  const poolSortLabel = sort === "subs_desc" ? "SUBS DESC" : sort === "subs_asc" ? "SUBS ASC" : "SCORE DESC";
 
   return (
-    <section className="view">
+    <section className={`view ${showPoolFilters ? "pool-view" : ""}`}>
       {showPoolFilters ? (
         <>
           <form className="discovery-console discovery-console-folded clipped" onSubmit={(event) => void runPoolSearch(event)}>
@@ -1080,16 +1089,20 @@ function StageView({
           </form>
           {searchSummary && <RunSummary summary={searchSummary} />}
           <Toolbar>
-            <button type="button" onClick={() => setFiltersOpen((value) => !value)}>
-              FILTERS {filtersOpen ? "OPEN" : "CLOSED"}
+            <div className="pool-toolbar-context" aria-label={`Pool, ${channels.length} resolved, showing ${visible.length}, sorted ${poolSortLabel.toLowerCase()}`}>
+              <strong>POOL</strong>
+              <span>· {channels.length} RESOLVED · SHOWING {visible.length} · SORT {poolSortLabel}</span>
+            </div>
+            <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)}>
+              FILTERS ({activeFilterCount})
             </button>
-            <select value={sort} onChange={(event) => setSort(event.target.value as SortMode)}>
+            <select aria-label="Pool sort" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}>
               <option value="score">score desc</option>
               <option value="subs_desc">subs desc</option>
               <option value="subs_asc">subs asc</option>
             </select>
             <button type="button" onClick={() => void enrichStage()} disabled={bulk.active || visible.length === 0}>
-              Enrich max {Math.min(visible.length || 1, 30)}
+              ENRICH MAX {Math.min(visible.length || 1, 30)}
             </button>
             <div className="density-toggle" role="group" aria-label="Pool density">
               <button type="button" className={density === "cards" ? "active" : ""} aria-pressed={density === "cards"} onClick={() => setDensity("cards")}>Cards</button>
@@ -3449,7 +3462,7 @@ function ExpandDialog({
 }
 
 function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="toolbar clipped">{children}</div>;
+  return <div className="toolbar pool-toolbar">{children}</div>;
 }
 
 function ToggleGroup({

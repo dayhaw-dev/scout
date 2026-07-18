@@ -55,7 +55,11 @@ const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
 const KIND_OPTIONS: ChannelKind[] = ["creator", "brand"];
 const ALL_KIND_OPTIONS: ChannelKind[] = ["creator", "brand", "alt"];
-const TABS: Tab[] = ["pool", "shortlist", "outreach", "watchlist", "snoozed", "seeds", "rejected", "brands"];
+const TAB_SHELVES: Array<{ label: string; tone: string; tabs: Tab[] }> = [
+  { label: "Work", tone: "work", tabs: ["pool", "shortlist", "outreach"] },
+  { label: "Watch", tone: "watch", tabs: ["watchlist", "snoozed"] },
+  { label: "Library", tone: "library", tabs: ["seeds", "brands", "rejected"] },
+];
 const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "pitched", "signed", "passed"];
 
 export function App() {
@@ -164,20 +168,30 @@ export function App() {
         )}
       </header>
 
-      <nav className="tabs" aria-label="SCOUT views">
-        {TABS.map((item) => {
-          const count = tabCount(item, status);
-          return (
-            <button
-              key={item}
-              className={tab === item ? "active" : ""}
-              onClick={() => setTab(item)}
-            >
-              <span>{label(item)}</span>
-              {count !== null && <strong>{count}</strong>}
-            </button>
-          );
-        })}
+      <nav className="tabs tab-shelves" aria-label="SCOUT views">
+        {TAB_SHELVES.map((shelf) => (
+          <div
+            className={`tab-shelf tab-shelf-${shelf.tone}`}
+            role="group"
+            aria-label={`${shelf.label} views`}
+            key={shelf.label}
+          >
+            <span className="tab-shelf-label" aria-hidden="true">{shelf.label}</span>
+            {shelf.tabs.map((item) => {
+              const count = tabCount(item, status);
+              return (
+                <button
+                  key={item}
+                  className={tab === item ? "active" : ""}
+                  onClick={() => setTab(item)}
+                >
+                  <span>{label(item)}</span>
+                  {count !== null && <strong>{count}</strong>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
       {bulkProgress && (
         <BulkProgressPanel progress={bulkProgress} onCancel={bulkUi.cancel} />

@@ -55,7 +55,10 @@ test("score popover renders the persisted real scorer components without formula
   assert.match(scorer, /contactability: 15/);
 });
 
-test("Commit 2 leaves the existing flat tab header intact", () => {
-  assert.match(app, /const TABS: Tab\[\]/);
-  assert.doesNotMatch(app, /WORK \/ WATCH \/ LIBRARY|header-shelf|tab-shelf/);
+test("Commit 5 supersedes the deferred flat header without changing the Pool surface", () => {
+  assert.match(app, /const TAB_SHELVES:/);
+  assert.match(app, /tab-shelves/);
+  assert.match(app, /tone: "work"/);
+  assert.match(app, /tone: "watch"/);
+  assert.match(app, /tone: "library"/);
 });

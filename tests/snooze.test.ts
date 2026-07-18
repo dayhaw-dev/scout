@@ -84,7 +84,8 @@ test("migration, snapshot target, and UI stage carry snooze end to end", () => {
   assert.match(migration, /woke_at TEXT/);
   assert.match(worker, /c\.status IN \('watchlist', 'snoozed'\)/);
   assert.match(worker, /datetime\(snoozed_until\) <= CURRENT_TIMESTAMP/);
-  assert.match(ui, /"watchlist", "snoozed", "seeds"/);
+  assert.match(ui, /label: "Watch".*tabs: \["watchlist", "snoozed"\]/);
+  assert.match(ui, /label: "Library".*"seeds"/);
   assert.match(ui, /\{snoozedCount\} snoozed - wake or reject something/);
   assert.match(ui, />WOKE</);
 });

@@ -199,16 +199,43 @@ a:hover {
 
 .tabs {
   display: flex;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
   border-bottom: 1px solid rgba(34, 211, 238, 0.18);
   margin-bottom: 18px;
   overflow-x: auto;
 }
 
+.tab-shelf {
+  display: flex;
+  align-items: stretch;
+  min-width: max-content;
+}
+
+.tab-shelf + .tab-shelf {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(34, 211, 238, 0.16);
+}
+
+.tab-shelf.tab-shelf-library {
+  margin-left: auto;
+}
+
+.tab-shelf-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  color: #587888;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
 .tabs button {
   background: transparent;
   border-bottom: 0;
-  min-width: 112px;
+  min-width: 96px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -227,6 +254,24 @@ a:hover {
 }
 
 .tabs button.active strong {
+  color: #07111f;
+}
+
+.tab-shelf-watch button strong {
+  color: #8aa5b0;
+}
+
+.tab-shelf-library button,
+.tab-shelf-library .tab-shelf-label {
+  color: #6b8590;
+}
+
+.tab-shelf-library button strong {
+  color: #55717c;
+}
+
+.tab-shelf-watch button.active strong,
+.tab-shelf-library button.active strong {
   color: #07111f;
 }
 
@@ -2725,6 +2770,18 @@ a:hover {
 
   .status-strip {
     justify-content: stretch;
+  }
+
+  .tab-shelf.tab-shelf-library {
+    margin-left: 8px;
+  }
+
+  .tab-shelf-label {
+    padding: 0 7px;
+  }
+
+  .tabs button {
+    min-width: 92px;
   }
 
   .stat-module {

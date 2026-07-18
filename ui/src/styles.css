@@ -229,7 +229,7 @@ a:hover {
   letter-spacing: 0.08em;
   line-height: 1;
   text-transform: uppercase;
-  color: #8fb4c4;
+  color: #7fa5c2;
 }
 
 .stat-module p {
@@ -356,6 +356,7 @@ a:hover {
 }
 
 .tabs button {
+  color: #7fa5c2;
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -385,30 +386,29 @@ a:hover {
 }
 
 .tabs button strong {
-  color: #22d3ee;
+  color: #587888;
   font-size: 12px;
 }
 
 .tabs button.active strong {
-  color: #22d3ee;
+  color: #7fa5c2;
 }
 
 .tab-shelf-watch button strong {
-  color: #8aa5b0;
+  color: #587888;
 }
 
-.tab-shelf-library button,
 .tab-shelf-library .tab-shelf-label {
-  color: #6b8590;
+  color: #496a79;
 }
 
 .tab-shelf-library button strong {
-  color: #55717c;
+  color: #496a79;
 }
 
 .tab-shelf-watch button.active strong,
 .tab-shelf-library button.active strong {
-  color: #22d3ee;
+  color: #7fa5c2;
 }
 
 .view {

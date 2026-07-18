@@ -14,9 +14,15 @@ test("header groups all eight views into WORK, WATCH, and LIBRARY shelves", () =
   assert.match(app, /shelf\.tabs\.map/);
 });
 
-test("library counts stay quiet while active tabs use the cyan baseline event", () => {
+test("inactive tab labels and counts recede while the active tab keeps the cyan baseline event", () => {
   assert.match(styles, /\.tab-shelf\.tab-shelf-library \{[\s\S]*?margin-left: auto/);
-  assert.match(styles, /\.tab-shelf-library button strong \{[\s\S]*?color: #55717c/);
+  assert.match(styles, /\.tabs button \{[\s\S]*?color: #7fa5c2;[\s\S]*?background: transparent/);
+  assert.match(styles, /\.tabs button strong \{[\s\S]*?color: #587888/);
+  assert.match(styles, /\.tab-shelf-library \.tab-shelf-label \{[\s\S]*?color: #496a79/);
+  assert.match(styles, /\.tab-shelf-library button strong \{[\s\S]*?color: #496a79/);
   assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff/);
-  assert.match(styles, /\.tab-shelf-library button\.active strong \{[\s\S]*?color: #22d3ee/);
+  assert.match(styles, /\.tabs button\.active strong \{[\s\S]*?color: #7fa5c2/);
+  assert.match(styles, /\.tab-shelf-library button\.active strong \{[\s\S]*?color: #7fa5c2/);
+  assert.match(styles, /\.stat-module span \{[\s\S]*?color: #7fa5c2/);
+  assert.match(styles, /\.stat-module strong \{[\s\S]*?color: #22d3ee/);
 });

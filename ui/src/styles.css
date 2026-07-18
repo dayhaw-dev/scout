@@ -2315,25 +2315,25 @@ a:hover {
   font-size: 9px;
 }
 
-.prospect-card.pool-card .prospect-stat-grid .stat-block strong {
+.prospect-card .prospect-stat-grid .stat-block strong {
   color: #f4fbff;
   font-size: 17px;
   font-weight: 800;
   line-height: 1;
 }
 
-.prospect-card.pool-card .prospect-stat-grid .stat-block span {
+.prospect-card .prospect-stat-grid .stat-block span {
   color: #587888;
   font-size: 9px;
   font-weight: 400;
   letter-spacing: 0.055em;
 }
 
-.prospect-card.pool-card .prospect-stat-grid .stat-block.signal-stat strong {
+.prospect-card .prospect-stat-grid .stat-block.signal-stat strong {
   color: #22d3ee;
 }
 
-.prospect-card.pool-card .prospect-stat-grid .stat-block.muted-stat strong {
+.prospect-card .prospect-stat-grid .stat-block.muted-stat strong {
   color: #9bc4d2;
 }
 
@@ -2386,15 +2386,20 @@ a:hover {
   margin-top: auto;
   padding-top: 0;
   gap: 6px;
+  justify-content: flex-start;
 }
 
 .prospect-card .primary-action {
   flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
   padding-inline: 14px;
 }
 
 .prospect-card .secondary-action {
   flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
   padding-inline: 12px;
 }
 

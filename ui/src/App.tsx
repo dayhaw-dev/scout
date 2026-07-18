@@ -2374,10 +2374,10 @@ function ChannelCard({
   const reach = effectiveReach(channel);
 
   return (
-    <article className={`channel-card prospect-card ${tab === "pool" ? "pool-card" : ""} ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
+    <article className={`channel-card prospect-card ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
       <div className="card-head">
         <ChannelImage
-          src={tab === "pool" ? channel.thumbnail_url : null}
+          src={channel.thumbnail_url}
           title={channel.title ?? channel.handle ?? channel.channel_id}
           size="large"
         />

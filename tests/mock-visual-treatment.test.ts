@@ -26,12 +26,14 @@ test("prospect grids fill available width and keep row heights aligned", () => {
   assert.match(styles, /\.compact-grid \{[\s\S]*?repeat\(auto-fit, minmax\(min\(280px, 100%\), 1fr\)\)/);
 });
 
-test("Pool cards emphasize stat values and restore contained thumbnails", () => {
-  assert.match(app, /tab === "pool" \? "pool-card"/);
-  assert.match(app, /src=\{tab === "pool" \? channel\.thumbnail_url : null\}/);
-  assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block strong \{[\s\S]*?color: #f4fbff;[\s\S]*?font-size: 17px;[\s\S]*?font-weight: 800;/);
-  assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block span \{[\s\S]*?color: #587888;[\s\S]*?font-size: 9px;/);
-  assert.match(styles, /\.prospect-card\.pool-card \.prospect-stat-grid \.stat-block\.signal-stat strong \{[\s\S]*?color: #22d3ee;/);
+test("shared prospect cards emphasize stats and use contained thumbnails on every surface", () => {
+  assert.doesNotMatch(app, /tab === "pool" \? "pool-card"/);
+  assert.match(app, /<ChannelImage[\s\S]*?src=\{channel\.thumbnail_url\}/);
+  assert.doesNotMatch(app, /src=\{tab === "pool" \? channel\.thumbnail_url : null\}/);
+  assert.match(styles, /\.prospect-card \.prospect-stat-grid \.stat-block strong \{[\s\S]*?color: #f4fbff;[\s\S]*?font-size: 17px;[\s\S]*?font-weight: 800;/);
+  assert.match(styles, /\.prospect-card \.prospect-stat-grid \.stat-block span \{[\s\S]*?color: #587888;[\s\S]*?font-size: 9px;/);
+  assert.match(styles, /\.prospect-card \.prospect-stat-grid \.stat-block\.signal-stat strong \{[\s\S]*?color: #22d3ee;/);
+  assert.doesNotMatch(styles, /\.prospect-card\.pool-card \.prospect-stat-grid/);
   assert.match(styles, /\.prospect-card \.card-head \{[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\) auto;/);
   assert.match(styles, /\.prospect-card \.card-head img,[\s\S]*?width: 48px;[\s\S]*?height: 48px;[\s\S]*?border-radius: 50%;/);
 });
@@ -40,9 +42,18 @@ test("prospect headers truncate uniformly and action baselines ignore optional c
   assert.match(app, /className="channel-title"[\s\S]*?title=\{channel\.title \?\? channel\.channel_id\}/);
   assert.match(styles, /\.prospect-card \.channel-title \{[\s\S]*?font-size: 16px;[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;/);
   assert.match(styles, /\.prospect-card \.card-identity \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
-  assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?margin-top: auto;[\s\S]*?gap: 6px;/);
-  assert.match(styles, /\.prospect-card \.primary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?padding-inline: 14px;/);
-  assert.match(styles, /\.prospect-card \.secondary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?padding-inline: 12px;/);
+  assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?margin-top: auto;[\s\S]*?gap: 6px;[\s\S]*?justify-content: flex-start;/);
+  assert.match(styles, /\.prospect-card \.primary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?width: auto;[\s\S]*?padding-inline: 14px;/);
+  assert.match(styles, /\.prospect-card \.secondary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?width: auto;[\s\S]*?padding-inline: 12px;/);
+});
+
+test("Eyes Peeled keeps its growth chips, NO TREND state, and sparkline inside the shared card", () => {
+  assert.match(app, /<GrowthChipItems row=\{channel\} \/>/);
+  assert.match(app, /<Sparkline points=\{channel\.snapshots \?\? \[\]\} \/>/);
+  assert.match(app, /className="chip badge-attribute no-trend-chip">NO TREND/);
+  assert.match(app, /growthWindowLabel\("SUBS", 7/);
+  assert.match(app, /growthWindowLabel\("SUBS", 30/);
+  assert.match(app, /growthWindowLabel\("VIEWS", 30/);
 });
 
 test("prospect actions and overflow follow the GENEOS hierarchy", () => {

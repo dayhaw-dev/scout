@@ -37,6 +37,19 @@ test("seed locking migration is additive and locks the two verified channel IDs"
   assert.doesNotMatch(migration, /ALTER TABLE\s+channels\s+RENAME/i);
 });
 
+test("seed lock reasons are additive and make demo reserves authoritative", () => {
+  const migration = readFileSync("migrations/0024_seed_lock_reasons.sql", "utf8");
+
+  assert.match(migration, /ALTER TABLE channels ADD COLUMN seed_lock_reason TEXT/);
+  assert.match(migration, /DEMO FENCE/);
+  assert.match(migration, /DEMO RESERVE/);
+  assert.match(migration, /UCGEDbg1EKT7HCqbT7OAsLKA/);
+  assert.match(migration, /UCpnuadQ_w3r6f4Q_NRlqd-w/);
+  assert.doesNotMatch(migration, /CREATE TABLE\s+channels/i);
+  assert.doesNotMatch(migration, /DROP TABLE\s+channels/i);
+  assert.doesNotMatch(migration, /ALTER TABLE\s+channels\s+RENAME/i);
+});
+
 test("empty explicit seed target arrays mean no targets, never all seeds", () => {
   assert.equal(hasExplicitEmptySeedTargets([]), true);
   assert.equal(hasExplicitEmptySeedTargets(undefined), false);

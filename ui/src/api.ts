@@ -16,6 +16,7 @@ export interface ChannelCardRow {
   thumbnail_url: string | null;
   is_seed: boolean;
   seed_locked: boolean;
+  seed_lock_reason: "DEMO FENCE" | "DEMO RESERVE" | null;
   is_active: boolean;
   subscriber_count: number | null;
   score: number | null;
@@ -84,6 +85,7 @@ export interface RawChannelRow {
   thumbnail_url: string | null;
   is_seed: boolean;
   seed_locked: boolean;
+  seed_lock_reason: "DEMO FENCE" | "DEMO RESERVE" | null;
   is_active: boolean;
   subscriber_count: number | null;
   created_at: string;

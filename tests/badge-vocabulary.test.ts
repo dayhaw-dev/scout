@@ -18,8 +18,8 @@ test("channel cards use the three-tier badge vocabulary", () => {
   assert.match(app, /badge-alert locked-chip/);
 
   assert.match(app, /badge-attribute active-relationship-chip">ACTIVE/);
-  assert.match(app, /badge-attribute freshness-chip freshness-unmined/);
-  assert.match(app, /badge-attribute freshness-chip freshness-mined/);
+  assert.match(app, /seed-ore-tile.*ore-high/);
+  assert.match(app, /seed-ore-tile.*ore-mined/);
   assert.match(app, /badge-attribute no-trend-chip">NO TREND/);
   assert.doesNotMatch(app, />TRACKING/);
 });

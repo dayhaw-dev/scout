@@ -136,7 +136,7 @@ test("expand-all seeds is client-orchestrated and server batch is disabled", () 
   assert.match(app, /EXPAND_ALL_CLIENT_CREDIT_CAP = 150/);
   assert.match(app, /failures/);
   assert.doesNotMatch(api, /expandAllSeeds\(\)/);
-  assert.match(app, /Expand All Seeds max/);
+  assert.match(app, /Expand All ≤\{EXPAND_ALL_CLIENT_CREDIT_CAP\} CR/);
 });
 
 test("seed list includes lifetime yield and sorts by yield descending", () => {
@@ -146,7 +146,7 @@ test("seed list includes lifetime yield and sorts by yield descending", () => {
   assert.match(source, /WHERE resolved\.source_channel_id = c\.channel_id/);
   assert.match(source, /AS yield_count/);
   assert.match(source, /ORDER BY yield_count DESC/);
-  assert.match(app, /YIELD \{seed\.yield_count \?\? 0\}/);
+  assert.match(app, /<span>YIELD<\/span>\s*<strong>\{seed\.yield_count \?\? 0\}<\/strong>/);
   assert.match(api, /yield_count\?: number/);
 });
 
@@ -201,7 +201,7 @@ test("phase 9.5 manual snapshots support watchlist, seeds, and channel scopes", 
   assert.match(source, /function parseSnapshotScope/);
   assert.match(source, /scope must be watchlist, seeds, or channel/);
   assert.match(source, /c\.is_seed = 1/);
-  assert.match(app, /Snapshot All Seeds max/);
+  assert.match(app, /Snapshot All ≤\{Math\.min\(seeds\.length, 60\)\} CR/);
   assert.match(app, /runClientSnapshotAllSeeds/);
   assert.match(app, /scope: "channel", channel_id: seed\.channel_id/);
   assert.match(app, /runBulkOperation/);

@@ -36,7 +36,7 @@ test("phase 11 exposes title-mined content suggestions and seed query chips", ()
   assert.match(app, /Query pool low\. Regen from seeds/);
   assert.match(app, /onOpenSeeds/);
   assert.match(app, /setContentSuggestions\(\[\]\)/);
-  assert.match(app, /Queries \{queriesOpen \? "hide" : "show"\}/);
+  assert.match(app, /<summary>QUERIES \{phrases\.length\}<\/summary>/);
   assert.match(api, /content_suggestions: SearchSuggestion\[\]/);
   assert.match(api, /query_phrases\?: string\[\]/);
   assert.match(api, /mineQueries/);

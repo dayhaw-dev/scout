@@ -1538,6 +1538,9 @@ function SeedsView({
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
   const unlockedSeeds = useMemo(() => seeds.filter((seed) => !seed.seed_locked), [seeds]);
   const sortedSeeds = useMemo(() => sortSeeds(seeds, seedSort), [seeds, seedSort]);
+  const oreSeeds = useMemo(() => sortedSeeds.filter((seed) => !isMinedOutSeed(seed)), [sortedSeeds]);
+  const minedOutSeeds = useMemo(() => sortedSeeds.filter(isMinedOutSeed), [sortedSeeds]);
+  const seedGardenStats = useMemo(() => summarizeSeedGarden(seeds), [seeds]);
 
   const applyFreshness = useCallback((channelId: string, freshness: SeedMiningFreshness) => {
     setSeeds((rows) => rows.map((seed) => (
@@ -1767,70 +1770,108 @@ function SeedsView({
   }
 
   return (
-    <section className="view">
-      <form className="inline-form clipped" onSubmit={(event) => void addSeed(event)}>
-        <input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="@handle or channel URL" />
-        <button className="primary" type="submit">Add Seed</button>
-        <button
-          type="button"
-          onClick={() => void expandAll()}
-          disabled={bulk.active || unlockedSeeds.length === 0}
-          title="Runs maxPages 1 and maxResolves 10 per seed, stopping before the 150-credit cap."
-        >
-          Expand All Seeds max {Math.min(EXPAND_ALL_CLIENT_CREDIT_CAP, unlockedSeeds.length * 11)} credits
-        </button>
-        <button
-          type="button"
-          onClick={() => void snapshotAllSeeds()}
-          disabled={bulk.active || seeds.length === 0}
-          title="Snapshots seed channels, skipping any taken within the last 48 hours."
-        >
-          Snapshot All Seeds max {seeds.length} credits
-        </button>
-        <button
-          type="button"
-          onClick={() => void regenerateQueries()}
-          disabled={bulk.active || seeds.length === 0}
-          title="Regenerates stored LLM query chips for each seed. Uses Anthropic, not ScrapeCreators credits."
-        >
-          Regen Queries max 0 credits
-        </button>
-        <button
-          type="button"
-          onClick={() => void checkFreshness()}
-          disabled={bulk.active || seeds.length === 0}
-          title="Refreshes public YouTube RSS only. Costs zero ScrapeCreators credits."
-        >
-          Check freshness
-        </button>
-        <label className="seed-sort-control">
-          <span>SORT</span>
-          <select value={seedSort} onChange={(event) => setSeedSort(event.target.value as SeedSortMode)}>
-            <option value="unmined">Unmined desc</option>
-            <option value="latest_upload">Latest upload</option>
-            <option value="yield">Yield desc</option>
-          </select>
-        </label>
+    <section className="view seeds-garden">
+      <form className="seed-garden-toolbar clipped" onSubmit={(event) => void addSeed(event)}>
+        <div className="seed-add-control">
+          <input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="@handle or channel URL" />
+          <button className="primary" type="submit">Add Seed</button>
+        </div>
+        <div className="seed-bulk-controls">
+          <button
+            type="button"
+            onClick={() => void expandAll()}
+            disabled={bulk.active || unlockedSeeds.length === 0}
+            title="Runs maxPages 1 and maxResolves 10 per unlocked seed, stopping before the 150-credit cap."
+          >
+            Expand All ≤{EXPAND_ALL_CLIENT_CREDIT_CAP} CR
+          </button>
+          <button
+            type="button"
+            onClick={() => void snapshotAllSeeds()}
+            disabled={bulk.active || seeds.length === 0}
+            title="Snapshots seed channels, skipping any taken within the last 48 hours."
+          >
+            Snapshot All ≤{Math.min(seeds.length, 60)} CR
+          </button>
+          <button
+            type="button"
+            onClick={() => void regenerateQueries()}
+            disabled={bulk.active || seeds.length === 0}
+            title="Regenerates stored LLM query chips. Uses Anthropic, not ScrapeCreators credits."
+          >
+            Regen Queries 0 CR
+          </button>
+          <button
+            type="button"
+            onClick={() => void checkFreshness()}
+            disabled={bulk.active || seeds.length === 0}
+            title="Refreshes public YouTube RSS only. Costs zero ScrapeCreators credits."
+          >
+            Check freshness
+          </button>
+          <label className="seed-sort-control">
+            <span>SORT</span>
+            <select value={seedSort} onChange={(event) => setSeedSort(event.target.value as SeedSortMode)}>
+              <option value="unmined">Unmined desc</option>
+              <option value="latest_upload">Latest upload</option>
+              <option value="yield">Yield desc</option>
+            </select>
+          </label>
+        </div>
       </form>
+      <div className="seed-garden-stats" aria-label="Seed garden totals">
+        <SeedGardenStat label="Seeds" value={String(seedGardenStats.seeds)} />
+        <SeedGardenStat label="Unmined uploads" value={`${seedGardenStats.unmined}${seedGardenStats.unminedLowerBound ? "+" : ""}`} />
+        <SeedGardenStat label="Lifetime yield" value={String(seedGardenStats.yield)} />
+        <SeedGardenStat label="Locked" value={String(seedGardenStats.locked)} />
+        <p>The garden is supply, not funnel. No scores here—only what remains to mine and what each seed has yielded.</p>
+      </div>
       {summary && <RunSummary summary={summary} />}
       {batchSummary && <ExpandAllSummary summary={batchSummary} />}
       {loading ? <Loading /> : seeds.length === 0 ? (
         <EmptyState title="No seeds yet" detail="Add a handle or promote a shortlist card into seed coverage." />
       ) : (
-        <div className="card-grid seed-grid">
-          {sortedSeeds.map((seed) => (
-            <SeedCard
-              key={seed.channel_id}
-              seed={seed}
-              onExpand={() => setDialogSeed(seed)}
-              onSnapshot={() => void snapshotSeed(seed)}
-              onUnseed={() => void unseed(seed)}
-              onQuery={onQuery}
-              onDismissQuery={(term) => void dismissSeedQuery(term)}
-              searchedTerms={searchedTerms}
-            />
-          ))}
-        </div>
+        <>
+          <div className="seed-honesty-line">
+            <strong>ORE REMAINING</strong>
+            <span>{oreSeeds.length} SEEDS · SORTED {seedSort.replace(/_/g, " ").toUpperCase()} · RSS COUNTS CAP AT 15+ PER SEED · INCLUDES SHORTS</span>
+          </div>
+          <div className="seed-rows" role="table" aria-label="Seeds with ore remaining">
+            {oreSeeds.map((seed) => (
+              <SeedRow
+                key={seed.channel_id}
+                seed={seed}
+                onExpand={() => setDialogSeed(seed)}
+                onSnapshot={() => void snapshotSeed(seed)}
+                onUnseed={() => void unseed(seed)}
+                onQuery={onQuery}
+                onDismissQuery={(term) => void dismissSeedQuery(term)}
+                searchedTerms={searchedTerms}
+              />
+            ))}
+          </div>
+          <section className="seed-mined-out" aria-label="Mined out seeds">
+            <div className="seed-honesty-line">
+              <strong>MINED OUT</strong>
+              <span>{minedOutSeeds.length} SEEDS · NOTHING LEFT IN THE CURRENT RSS WINDOW · SNAPSHOT STILL RUNS</span>
+            </div>
+            <div className="seed-rows seed-rows-muted" role="table">
+              {minedOutSeeds.map((seed) => (
+                <SeedRow
+                  key={seed.channel_id}
+                  seed={seed}
+                  onExpand={() => setDialogSeed(seed)}
+                  onSnapshot={() => void snapshotSeed(seed)}
+                  onUnseed={() => void unseed(seed)}
+                  onQuery={onQuery}
+                  onDismissQuery={(term) => void dismissSeedQuery(term)}
+                  searchedTerms={searchedTerms}
+                  muted
+                />
+              ))}
+            </div>
+          </section>
+        </>
       )}
       {dialogSeed && (
         <ExpandDialog
@@ -3095,7 +3136,16 @@ function SponsorScanDialog({
   );
 }
 
-function SeedCard({
+function SeedGardenStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function SeedRow({
   seed,
   onExpand,
   onSnapshot,
@@ -3103,6 +3153,7 @@ function SeedCard({
   onQuery,
   onDismissQuery,
   searchedTerms,
+  muted = false,
 }: {
   seed: RawChannelRow;
   onExpand: () => void;
@@ -3111,43 +3162,51 @@ function SeedCard({
   onQuery: (query: string) => void;
   onDismissQuery: (query: string) => void;
   searchedTerms: Set<string>;
+  muted?: boolean;
 }) {
-  const [queriesOpen, setQueriesOpen] = useState(false);
   const phrases = seed.query_phrases ?? [];
   return (
-    <article className="channel-card seed-card clipped">
-      <div className="card-head seed-head">
+    <article className={`seed-row ${muted ? "seed-row-muted" : ""}`} role="row">
+      <SeedOreTile freshness={seed.mining_freshness ?? null} />
+      <div className="seed-row-channel" role="cell">
         <ChannelImage
           src={seed.thumbnail_url}
           title={seed.title ?? seed.handle ?? seed.channel_id}
-          size="large"
+          size="small"
         />
-        <div>
+        <div className="seed-row-identity">
           <a className="channel-title" href={`https://youtube.com/channel/${seed.channel_id}`} target="_blank" rel="noreferrer">
             {seed.title ?? seed.channel_id}
           </a>
-          <div className="muted">{seed.handle ? `@${seed.handle}` : "no handle"}</div>
+          <span>{seed.handle ? `@${seed.handle}` : "NO HANDLE"}</span>
         </div>
-      </div>
-      <div className="card-metrics">
-        <span>{compact(seed.subscriber_count)} subs</span>
-        <span className="seed-yield">YIELD {seed.yield_count ?? 0}</span>
         {seed.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
-        {seed.seed_locked && <span className="chip badge-alert locked-chip" title="Protected from seed modifications">🔒 LOCKED</span>}
-        <SeedFreshnessChip freshness={seed.mining_freshness ?? null} />
+        {seed.seed_locked && (
+          <span className="chip badge-alert locked-chip" title={seed.seed_lock_reason ?? "LOCK REASON NOT RECORDED"}>
+            ⌑ LOCKED
+          </span>
+        )}
       </div>
-      <GrowthChips row={seed} />
-      <Sparkline points={seed.snapshots ?? []} />
-      <div className="meta-line">
-        <span>added {shortDate(seed.created_at)}</span>
-        <SeedFreshnessRecency freshness={seed.mining_freshness ?? null} />
+      <div className="seed-row-stat" role="cell">
+        <span>YIELD</span>
+        <strong>{seed.yield_count ?? 0}</strong>
       </div>
-      {phrases.length > 0 && (
-        <div className="seed-queries">
-          <button type="button" onClick={() => setQueriesOpen((value) => !value)}>
-            Queries {queriesOpen ? "hide" : "show"}
-          </button>
-          {queriesOpen && (
+      <div className="seed-row-stat" role="cell">
+        <span>SUBS</span>
+        <strong>{compact(seed.subscriber_count)}</strong>
+      </div>
+      <div className="seed-row-stat" role="cell">
+        <span>ADDED</span>
+        <strong>{shortDate(seed.created_at)}</strong>
+      </div>
+      <div className={`seed-row-stat seed-last-upload ${seedLastUploadClass(seed.mining_freshness ?? null)}`} role="cell">
+        <span>LAST UPLOAD</span>
+        <strong><SeedFreshnessRecency freshness={seed.mining_freshness ?? null} /></strong>
+      </div>
+      <details className="seed-query-dropdown" role="cell">
+        <summary>QUERIES {phrases.length}</summary>
+        {phrases.length > 0 ? (
+          <div className="seed-query-popover">
             <div className="suggestions seed-query-list">
               {phrases.map((phrase) => (
                 <span className={`suggestion-chip ${searchedTerms.has(normalizeChipTerm(phrase)) ? "searched" : ""}`} key={phrase}>
@@ -3173,10 +3232,10 @@ function SeedCard({
                 </span>
               ))}
             </div>
-          )}
-        </div>
-      )}
-      <div className="card-actions">
+          </div>
+        ) : <span className="seed-query-empty">NO STORED QUERIES</span>}
+      </details>
+      <div className="seed-row-actions" role="cell">
         <button onClick={onExpand} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be expanded" : undefined}>Expand</button>
         <button onClick={onSnapshot}>Snapshot</button>
         <button onClick={onUnseed} disabled={seed.seed_locked} title={seed.seed_locked ? "Locked seeds cannot be unseeded" : undefined}>Unseed</button>
@@ -3185,55 +3244,28 @@ function SeedCard({
   );
 }
 
-function SeedFreshnessChip({ freshness }: { freshness: SeedMiningFreshness | null }) {
-  if (!freshness) {
-    return <span className="chip badge-attribute freshness-chip freshness-pending">CHECKING</span>;
-  }
-  if (freshness.never_mined) {
-    return (
-      <span
-        className={`chip badge-attribute freshness-chip freshness-never ${freshness.stale ? "freshness-stale" : ""}`}
-        title={freshness.error ?? "This seed has no stored videos."}
-      >
-        NEVER MINED{freshness.stale ? " · STALE" : ""}
-      </span>
-    );
-  }
-  if (freshness.status === "error") {
-    return <span className="chip badge-attribute freshness-chip freshness-error" title={freshness.error ?? undefined}>RSS ERROR</span>;
-  }
-  if (freshness.status === "empty") {
-    return (
-      <span className={`chip badge-attribute freshness-chip freshness-pending ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
-        NO RSS ENTRIES{freshness.stale ? " · STALE" : ""}
-      </span>
-    );
-  }
-  if ((freshness.unmined_count ?? 0) > 0) {
-    return (
-      <span
-        className={`chip badge-attribute freshness-chip freshness-unmined ${freshness.stale ? "freshness-stale" : ""}`}
-        title={freshness.error ?? `Checked ${relativeTime(freshness.checked_at)} from ${freshness.rss_entry_count} RSS entries.`}
-      >
-        {freshness.unmined_count}{freshness.unmined_is_lower_bound ? "+" : ""} UNMINED{freshness.stale ? " · STALE" : ""}
-      </span>
-    );
-  }
+function SeedOreTile({ freshness }: { freshness: SeedMiningFreshness | null }) {
+  if (!freshness) return <div className="seed-ore-tile ore-pending"><strong>--</strong><span>CHECKING</span></div>;
+  if (freshness.never_mined) return <div className="seed-ore-tile ore-never"><strong>!</strong><span>NEVER MINED</span></div>;
+  if (freshness.status === "error") return <div className="seed-ore-tile ore-error" title={freshness.error ?? undefined}><strong>!</strong><span>RSS ERROR</span></div>;
+  if (freshness.status === "empty") return <div className="seed-ore-tile ore-pending"><strong>0</strong><span>NO RSS</span></div>;
+  const count = freshness.unmined_count ?? 0;
   return (
-    <span className={`chip badge-attribute freshness-chip freshness-mined ${freshness.stale ? "freshness-stale" : ""}`} title={freshness.error ?? undefined}>
-      MINED{freshness.stale ? " · STALE" : ""}
-    </span>
+    <div className={`seed-ore-tile ${count >= 8 ? "ore-high" : count > 0 ? "ore-low" : "ore-mined"}`} title={freshness.error ?? undefined}>
+      <strong>{count}{freshness.unmined_is_lower_bound ? "+" : ""}</strong>
+      <span>{count > 0 ? "UNMINED" : "MINED"}{freshness.stale ? " · STALE" : ""}</span>
+    </div>
   );
 }
 
 function SeedFreshnessRecency({ freshness }: { freshness: SeedMiningFreshness | null }) {
-  if (!freshness) return <span>freshness pending</span>;
+  if (!freshness) return <span>PENDING</span>;
   if (freshness.latest_upload_at) {
-    return <span>last upload {relativeTime(freshness.latest_upload_at)}</span>;
+    return <span>{relativeTime(freshness.latest_upload_at)}</span>;
   }
-  if (freshness.status === "empty") return <span>no RSS entries</span>;
-  if (freshness.status === "error") return <span>RSS check failed</span>;
-  return <span>last upload unknown</span>;
+  if (freshness.status === "empty") return <span>NO RSS</span>;
+  if (freshness.status === "error") return <span>RSS ERROR</span>;
+  return <span>UNKNOWN</span>;
 }
 
 type GrowthRow = Pick<
@@ -4212,6 +4244,54 @@ function freshnessSortValue(seed: RawChannelRow): number {
 function freshnessUploadTime(seed: RawChannelRow): number {
   const parsed = Date.parse(seed.mining_freshness?.latest_upload_at ?? "");
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function isMinedOutSeed(seed: RawChannelRow): boolean {
+  const freshness = seed.mining_freshness;
+  return Boolean(
+    freshness
+    && freshness.status === "ok"
+    && !freshness.never_mined
+    && (freshness.unmined_count ?? 0) === 0,
+  );
+}
+
+function seedLastUploadClass(freshness: SeedMiningFreshness | null): string {
+  if (!freshness?.latest_upload_at) return "";
+  const published = Date.parse(freshness.latest_upload_at);
+  if (!Number.isFinite(published)) return "";
+  return Date.now() - published < 24 * 60 * 60 * 1000 ? "seed-upload-fresh" : "";
+}
+
+function summarizeSeedGarden(seeds: RawChannelRow[]): {
+  seeds: number;
+  unmined: number;
+  unminedLowerBound: boolean;
+  yield: number;
+  locked: number;
+} {
+  return seeds.reduce<{
+    seeds: number;
+    unmined: number;
+    unminedLowerBound: boolean;
+    yield: number;
+    locked: number;
+  }>((summary, seed) => {
+    const freshness = seed.mining_freshness;
+    if (freshness?.status === "ok" && !freshness.never_mined) {
+      summary.unmined += freshness.unmined_count ?? 0;
+      summary.unminedLowerBound ||= freshness.unmined_is_lower_bound;
+    }
+    summary.yield += seed.yield_count ?? 0;
+    summary.locked += seed.seed_locked ? 1 : 0;
+    return summary;
+  }, {
+    seeds: seeds.length,
+    unmined: 0,
+    unminedLowerBound: false,
+    yield: 0,
+    locked: 0,
+  });
 }
 
 function snoozeUntil(duration: "1" | "3" | "6" | "custom", customDate: string): string {

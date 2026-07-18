@@ -3408,6 +3408,7 @@ interface ChannelRow {
   thumbnail_url: string | null;
   is_seed: number;
   seed_locked: number;
+  seed_lock_reason: "DEMO FENCE" | "DEMO RESERVE" | null;
   is_active: number;
   discovered_via: string;
   source_channel_id: string | null;

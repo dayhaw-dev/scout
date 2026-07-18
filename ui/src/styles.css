@@ -188,13 +188,13 @@ a:hover {
   display: grid;
   align-content: center;
   height: 64px;
-  background: transparent;
-  border: 1px solid var(--border-muted);
+  background: #081321;
+  border: 1px solid #16435f;
   padding: 7px 10px;
 }
 
 .stat-module + .stat-module {
-  margin-left: -1px;
+  margin-left: 0;
 }
 
 .stat-module.clipped {

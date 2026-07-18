@@ -13,9 +13,12 @@ test("mock treatment keeps tabs flat and containers hairline", () => {
 });
 
 test("prospect treatment stays compact and flat", () => {
-  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 218px;[\s\S]*?padding: 9px 11px 10px;/);
+  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 0;[\s\S]*?align-self: start;[\s\S]*?padding: 9px 11px 10px;[\s\S]*?gap: 4px;/);
   assert.match(styles, /\.prospect-card::before,[\s\S]*?calc\(100% - 7px\)/);
   assert.match(styles, /\.prospect-card \.score \{[\s\S]*?width: 46px;[\s\S]*?box-shadow: none;/);
+  assert.match(styles, /\.prospect-card \.status-chip-row:empty \{[\s\S]*?display: none;/);
+  assert.match(styles, /\.prospect-card \.provenance-line \{[\s\S]*?min-height: 0;/);
+  assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?padding-top: 0;/);
 });
 
 test("Pool cards emphasize stat values and restore contained thumbnails", () => {

@@ -2139,11 +2139,12 @@ a:hover {
 .prospect-card {
   position: relative;
   isolation: isolate;
-  min-height: 218px;
+  min-height: 0;
+  align-self: start;
   border: 0;
   background: transparent;
   padding: 9px 11px 10px;
-  gap: 6px;
+  gap: 4px;
 }
 
 .prospect-card::before,
@@ -2260,8 +2261,12 @@ a:hover {
 }
 
 .prospect-card .status-chip-row {
-  min-height: 18px;
+  min-height: 0;
   gap: 4px;
+}
+
+.prospect-card .status-chip-row:empty {
+  display: none;
 }
 
 .stat-block.signal-stat strong,
@@ -2270,6 +2275,7 @@ a:hover {
 }
 
 .prospect-card .provenance-line {
+  min-height: 0;
   font-size: 9px;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -2304,7 +2310,7 @@ a:hover {
 }
 
 .prospect-card .card-actions {
-  padding-top: 2px;
+  padding-top: 0;
 }
 
 .score-popover-anchor {

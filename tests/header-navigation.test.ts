@@ -17,6 +17,6 @@ test("header groups all eight views into WORK, WATCH, and LIBRARY shelves", () =
 test("library counts stay quiet while active tabs use the cyan baseline event", () => {
   assert.match(styles, /\.tab-shelf\.tab-shelf-library \{[\s\S]*?margin-left: auto/);
   assert.match(styles, /\.tab-shelf-library button strong \{[\s\S]*?color: #55717c/);
-  assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: transparent;[\s\S]*?border-bottom-color: #22d3ee/);
+  assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff/);
   assert.match(styles, /\.tab-shelf-library button\.active strong \{[\s\S]*?color: #22d3ee/);
 });

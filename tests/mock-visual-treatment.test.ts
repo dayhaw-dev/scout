@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 const styles = readFileSync("ui/src/styles.css", "utf8");
 const app = readFileSync("ui/src/App.tsx", "utf8");
 
-test("mock treatment keeps tabs flat and containers hairline", () => {
+test("mock treatment keeps inactive tabs flat, lifts the active tab, and keeps containers hairline", () => {
   assert.match(styles, /\.tabs button \{[\s\S]*?border-bottom: 2px solid transparent;[\s\S]*?clip-path: none;/);
-  assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: transparent;[\s\S]*?border-bottom-color: #22d3ee;/);
+  assert.match(styles, /\.tabs button\.active \{[\s\S]*?color: #e8f5ff;[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff;[\s\S]*?calc\(100% - 6px\)[\s\S]*?box-shadow: inset 0 1px 0 rgb\(23 217 255 \/ 10%\);/);
   assert.match(styles, /\.stat-module \{[\s\S]*?background: transparent;[\s\S]*?border: 1px solid/);
   assert.match(styles, /\.discovery-console-folded \{[\s\S]*?background: transparent;/);
   assert.match(styles, /\.topbar \{[\s\S]*?min-height: 90px;[\s\S]*?border: 1px solid var\(--border-muted\);/);

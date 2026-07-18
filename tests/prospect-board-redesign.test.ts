@@ -24,7 +24,10 @@ test("discovery console keeps frequent controls visible and expands only query l
   assert.match(app, /discovery-console-folded/);
   assert.doesNotMatch(app, /searchParameterEcho\(/);
   assert.match(app, /aria-expanded=\{discoveryOpen\}/);
-  assert.match(app, /className="discovery-control-row discovery-control-row-always"/);
+  assert.match(app, /className="discovery-inline-controls" aria-label="Frequent discovery controls"/);
+  assert.match(app, /ENRICH \{autoEnrich \? "ON" : "OFF"\}/);
+  assert.match(app, /SCAN \{autoScan \? "ON" : "OFF"\}/);
+  assert.match(app, /className="discovery-advanced-row" aria-label="Advanced discovery controls"[\s\S]*?AUTO-ENRICH[\s\S]*?AUTO-SCAN[\s\S]*?searchCreditCapLabel/);
   assert.match(app, /<SuggestionRows/);
   assert.match(app, /<SavedSearchesPanel[\s\S]*?searches=\{searches\}[\s\S]*?open=\{openDiscoveryLibrary === "saved"\}/);
   assert.match(app, /label="TOPICS"/);
@@ -35,8 +38,9 @@ test("discovery console keeps frequent controls visible and expands only query l
   assert.match(styles, /\.discovery-summary-row/);
   assert.match(styles, /\.discovery-expanded/);
   assert.match(styles, /\.discovery-chip-viewport,[\s\S]*?max-height: 176px;[\s\S]*?overflow: auto;/);
-  assert.match(styles, /\.discovery-control-row-always \{[\s\S]*?grid-template-columns:[\s\S]*?minmax\(154px,[\s\S]*?minmax\(116px,/);
-  assert.match(styles, /@media \(max-width: 980px\) \{[\s\S]*?\.discovery-control-row-always \{[\s\S]*?repeat\(4, minmax\(120px, 1fr\)\)/);
+  assert.match(styles, /\.discovery-summary-row \{[\s\S]*?grid-template-columns: auto minmax\(260px, 1fr\) auto auto auto auto;[\s\S]*?padding: 6px 8px;/);
+  assert.match(styles, /\.discovery-inline-controls \{[\s\S]*?grid-template-columns: 68px 116px 96px 86px;/);
+  assert.match(styles, /@media \(max-width: 1240px\) \{[\s\S]*?\.discovery-inline-controls \{[\s\S]*?grid-row: 2;/);
 });
 
 test("Pool subheader restores live context, filter count, and quiet system controls", () => {
@@ -52,11 +56,11 @@ test("Pool subheader restores live context, filter count, and quiet system contr
 
 test("deep variants stay with the keyword and discovery libraries share one accordion", () => {
   const keywordIndex = app.indexOf('className="keyword-control"');
+  const controlIndex = app.indexOf('className="discovery-inline-controls"');
   const variantIndex = app.indexOf('className="discovery-variant-row"');
-  const expandedIndex = app.indexOf('className="discovery-expanded discovery-libraries"');
-  const controlIndex = app.indexOf('className="discovery-control-row discovery-control-row-always"');
-  assert.ok(keywordIndex >= 0 && keywordIndex < variantIndex, "variants render directly after the keyword row");
-  assert.ok(variantIndex < controlIndex && controlIndex < expandedIndex, "frequent controls precede the expandable library panel");
+  const expandedIndex = app.indexOf('className="discovery-expanded"');
+  assert.ok(keywordIndex >= 0 && keywordIndex < controlIndex, "frequent controls share the collapsed keyword row");
+  assert.ok(controlIndex < variantIndex && variantIndex < expandedIndex, "variants remain between the collapsed row and expandable libraries");
   assert.match(app, /discovery-variant-row[\s\S]*?VARIANTS \/[\s\S]*?aria-label=\{`Remove \$\{variant\}`\}/);
   assert.match(styles, /\.discovery-variant-row \{[\s\S]*?grid-template-columns: 96px minmax\(0, 1fr\)/);
   assert.match(styles, /\.discovery-variant-chips \{[\s\S]*?flex-wrap: wrap;/);

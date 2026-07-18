@@ -982,6 +982,57 @@ function StageView({
                   {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
                 </button>
               </div>
+              <div className="discovery-inline-controls" aria-label="Frequent discovery controls">
+                <button
+                  type="button"
+                  className={`toggle-chip deep-compact ${deepSearch ? "active" : ""}`}
+                  aria-pressed={deepSearch}
+                  title="expands search with 4 query variants"
+                  onClick={() => setDeepSearch((value) => !value)}
+                >
+                  DEEP
+                </button>
+                <label className="discovery-compact-field uploads-field">
+                  <span className="field-label">UPLOADS</span>
+                  <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
+                    <option value="">any</option>
+                    <option value="today">today</option>
+                    <option value="this_week">this week</option>
+                    <option value="this_month">this month</option>
+                    <option value="this_year">this year</option>
+                  </select>
+                </label>
+                <label className="discovery-compact-field min-subs-field">
+                  <span className="field-label">MIN SUBS</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100000000}
+                    value={searchMinSubs}
+                    onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
+                  />
+                </label>
+                <label className="discovery-compact-field resolves-field">
+                  <span className="field-label">RESOLVES</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={25}
+                    value={searchMaxResolves}
+                    onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
+                  />
+                </label>
+              </div>
+              <span
+                className="discovery-state-summary"
+                aria-label={`Auto enrich ${autoEnrich ? "on" : "off"}, auto scan ${autoScan ? "on" : "off"}, ${searchCreditCapLabel}`}
+              >
+                <span className={autoEnrich ? "state-on" : ""}>ENRICH {autoEnrich ? "ON" : "OFF"}</span>
+                <i aria-hidden="true">{"\u00b7"}</i>
+                <span className={autoScan ? "state-on" : ""}>SCAN {autoScan ? "ON" : "OFF"}</span>
+                <i aria-hidden="true">{"\u00b7"}</i>
+                <span>CAP {searchCreditCap ? `${searchCreditCap} CR` : "NONE"}</span>
+              </span>
               <span className="discovery-library-count">
                 {suggestions.length + contentSuggestions.length} topics / {searches.length} saved queries
               </span>
@@ -1014,77 +1065,42 @@ function StageView({
                 </div>
               </div>
             )}
-            <div className="discovery-control-row discovery-control-row-always">
-              <label className="discovery-field uploads-field">
-                <span className="field-label">UPLOADS</span>
-                <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
-                  <option value="">any upload date</option>
-                  <option value="today">today</option>
-                  <option value="this_week">this week</option>
-                  <option value="this_month">this month</option>
-                  <option value="this_year">this year</option>
-                </select>
-              </label>
-              <label className="discovery-field min-subs-field">
-                <span className="field-label">MIN SUBS</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100000000}
-                  value={searchMinSubs}
-                  onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
-                />
-              </label>
-              <label className="discovery-field resolves-field">
-                <span className="field-label">RESOLVES</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={25}
-                  value={searchMaxResolves}
-                  onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
-                />
-              </label>
-              <div className="discovery-field toggle-field deep-field" title="expands search with 4 query variants">
-                <span className="field-label">DEEP</span>
-                <button type="button" className={`toggle-chip ${deepSearch ? "active" : ""}`} aria-pressed={deepSearch} onClick={() => setDeepSearch((value) => !value)}>
-                  DEEP
-                </button>
-              </div>
-              <div className="discovery-field toggle-field auto-enrich-field" title="enrich new arrivals on landing">
-                <span className="field-label">AUTO-ENRICH</span>
-                <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
-                  AUTO-ENRICH
-                </button>
-              </div>
-              <div className="discovery-field toggle-field auto-scan-field" title="scan new arrivals for SponsorBlock signals">
-                <span className="field-label">AUTO-SCAN</span>
-                <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
-                  AUTO-SCAN
-                </button>
-              </div>
-              <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
-                <span className="field-label">CAP</span>
-                <strong>{searchCreditCapLabel}</strong>
-              </div>
-            </div>
             {discoveryOpen && (
-              <div className="discovery-expanded discovery-libraries">
-                <SuggestionRows
-                  topics={suggestions}
-                  content={contentSuggestions}
-                  onPick={setSearchQuery}
-                  onDismiss={(term) => void dismissSuggestion(term)}
-                  searchedTerms={searchedTerms}
-                  onLowPool={onOpenSeeds}
-                  openPanel={openDiscoveryLibrary}
-                  onOpenPanel={setOpenDiscoveryLibrary}
-                />
-                <SavedSearchesPanel
-                  searches={searches}
-                  open={openDiscoveryLibrary === "saved"}
-                  onToggle={() => setOpenDiscoveryLibrary((value) => value === "saved" ? null : "saved")}
-                />
+              <div className="discovery-expanded">
+                <div className="discovery-advanced-row" aria-label="Advanced discovery controls">
+                  <span className="field-label">ADVANCED</span>
+                  <div className="discovery-field toggle-field auto-enrich-field" title="enrich new arrivals on landing">
+                    <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
+                      AUTO-ENRICH
+                    </button>
+                  </div>
+                  <div className="discovery-field toggle-field auto-scan-field" title="scan new arrivals for SponsorBlock signals">
+                    <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
+                      AUTO-SCAN
+                    </button>
+                  </div>
+                  <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
+                    <span className="field-label">CAP</span>
+                    <strong>{searchCreditCapLabel}</strong>
+                  </div>
+                </div>
+                <div className="discovery-libraries">
+                  <SuggestionRows
+                    topics={suggestions}
+                    content={contentSuggestions}
+                    onPick={setSearchQuery}
+                    onDismiss={(term) => void dismissSuggestion(term)}
+                    searchedTerms={searchedTerms}
+                    onLowPool={onOpenSeeds}
+                    openPanel={openDiscoveryLibrary}
+                    onOpenPanel={setOpenDiscoveryLibrary}
+                  />
+                  <SavedSearchesPanel
+                    searches={searches}
+                    open={openDiscoveryLibrary === "saved"}
+                    onToggle={() => setOpenDiscoveryLibrary((value) => value === "saved" ? null : "saved")}
+                  />
+                </div>
               </div>
             )}
           </form>

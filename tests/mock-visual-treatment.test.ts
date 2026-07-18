@@ -18,7 +18,7 @@ test("mock treatment keeps inactive tabs flat, lifts the active tab, and keeps c
 });
 
 test("prospect treatment stays compact and flat", () => {
-  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 0;[\s\S]*?align-self: start;[\s\S]*?padding: 9px 11px 10px;[\s\S]*?gap: 4px;/);
+  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 0;[\s\S]*?align-self: stretch;[\s\S]*?padding: 9px 11px 10px;[\s\S]*?gap: 4px;/);
   assert.match(styles, /--surface-strong: #0b1d30;/);
   assert.match(styles, /\.prospect-card::after \{[\s\S]*?background: var\(--surface-strong\);/);
   assert.match(styles, /\.prospect-card \{[\s\S]*?box-shadow: 0 6px 14px rgb\(0 0 0 \/ 16%\);/);
@@ -29,8 +29,8 @@ test("prospect treatment stays compact and flat", () => {
   assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?padding-top: 0;/);
 });
 
-test("shared ChannelCard grids cap sparse rows at the normal card width", () => {
-  assert.match(styles, /\.channel-card-grid \{[\s\S]*?repeat\(auto-fill, minmax\(min\(300px, 100%\), 336px\)\);[\s\S]*?align-items: start;[\s\S]*?justify-content: start;/);
+test("shared ChannelCard grids cap sparse rows and equalize height only within each row", () => {
+  assert.match(styles, /\.channel-card-grid \{[\s\S]*?repeat\(auto-fill, minmax\(min\(300px, 100%\), 336px\)\);[\s\S]*?align-items: stretch;[\s\S]*?justify-content: start;/);
   assert.match(styles, /\.channel-card-grid\.compact-grid \{[\s\S]*?repeat\(auto-fill, minmax\(min\(280px, 100%\), 336px\)\)/);
   assert.equal((app.match(/className="card-grid channel-card-grid"/g) ?? []).length, 4);
   assert.match(app, /className="card-grid compact-grid channel-card-grid"/);

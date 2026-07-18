@@ -802,7 +802,7 @@ a:hover {
 
 .channel-card-grid {
   grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 336px));
-  align-items: start;
+  align-items: stretch;
   justify-content: start;
 }
 
@@ -2680,7 +2680,7 @@ a:hover {
   position: relative;
   isolation: isolate;
   min-height: 0;
-  align-self: start;
+  align-self: stretch;
   border: 0;
   background: transparent;
   padding: 9px 11px 10px;

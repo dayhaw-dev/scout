@@ -2860,17 +2860,30 @@ a:hover {
   display: inline-flex;
   flex: 0 0 max-content;
   align-self: flex-start;
+  align-items: center;
+  height: 40px;
   width: max-content;
   max-width: 100%;
+  padding-block: 0;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
   white-space: nowrap;
 }
 
 .prospect-card .card-actions > .primary-action {
-  padding-inline: 14px;
+  padding-inline: 17px;
 }
 
 .prospect-card .card-actions > .secondary-action {
-  padding-inline: 12px;
+  padding-inline: 15px;
+  font-weight: 700;
+}
+
+.prospect-card .card-actions .overflow-trigger {
+  min-width: 44px;
+  height: 40px;
+  padding: 0 12px;
+  font-weight: 700;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
 }
 
 .score-popover-anchor {

@@ -54,9 +54,10 @@ test("prospect headers truncate uniformly and action baselines ignore optional c
   assert.match(styles, /\.prospect-card \.channel-title \{[\s\S]*?font-size: 17px;[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;/);
   assert.match(styles, /\.prospect-card \.card-identity \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
   assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?margin-top: auto;[\s\S]*?gap: 6px;[\s\S]*?justify-content: flex-start;/);
-  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action,[\s\S]*?flex: 0 0 max-content;[\s\S]*?align-self: flex-start;[\s\S]*?width: max-content;[\s\S]*?white-space: nowrap;/);
-  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action \{[\s\S]*?padding-inline: 14px;/);
-  assert.match(styles, /\.prospect-card \.card-actions > \.secondary-action \{[\s\S]*?padding-inline: 12px;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action,[\s\S]*?flex: 0 0 max-content;[\s\S]*?align-self: flex-start;[\s\S]*?height: 40px;[\s\S]*?width: max-content;[\s\S]*?calc\(100% - 7px\)[\s\S]*?white-space: nowrap;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.primary-action \{[\s\S]*?padding-inline: 17px;/);
+  assert.match(styles, /\.prospect-card \.card-actions > \.secondary-action \{[\s\S]*?padding-inline: 15px;[\s\S]*?font-weight: 700;/);
+  assert.match(styles, /\.prospect-card \.card-actions \.overflow-trigger \{[\s\S]*?min-width: 44px;[\s\S]*?height: 40px;[\s\S]*?calc\(100% - 7px\)/);
 });
 
 test("every non-Pool primary action uses the same max-content card button", () => {

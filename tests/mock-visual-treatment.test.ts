@@ -10,10 +10,10 @@ test("mock treatment keeps inactive tabs flat, lifts the active tab, and keeps c
   assert.match(styles, /\.tabs button\.active \{[\s\S]*?color: #e8f5ff;[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff;[\s\S]*?calc\(100% - 6px\)[\s\S]*?box-shadow: inset 0 1px 0 rgb\(23 217 255 \/ 10%\);/);
   assert.match(styles, /\.stat-module \{[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;/);
   assert.match(styles, /\.stat-module \+ \.stat-module \{[\s\S]*?margin-left: 0;/);
-  assert.match(styles, /\.discovery-console-folded \{[\s\S]*?background: transparent;/);
-  assert.match(styles, /\.topbar \{[\s\S]*?min-height: 90px;[\s\S]*?border: 1px solid var\(--border-muted\);/);
+  assert.match(styles, /\.discovery-console-folded \{[\s\S]*?background: #081321;[\s\S]*?border-bottom: 1px solid var\(--border-muted\);/);
+  assert.match(styles, /\.topbar \{[\s\S]*?min-height: 90px;[\s\S]*?border: 1px solid var\(--border-muted\);[\s\S]*?background: #081321;/);
   assert.match(styles, /\.stat-module \{[\s\S]*?height: 64px;[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;/);
-  assert.match(styles, /\.tabs \{[\s\S]*?min-height: 49px;[\s\S]*?margin-bottom: 0;/);
+  assert.match(styles, /\.tabs \{[\s\S]*?min-height: 49px;[\s\S]*?background: #081321;[\s\S]*?margin-bottom: 0;/);
   assert.match(app, /className="pipeline-value"[\s\S]*?POOL · SHORT · OUT/);
 });
 

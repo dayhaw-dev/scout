@@ -138,7 +138,7 @@ a:hover {
   min-height: 90px;
   padding: 12px 14px;
   border: 1px solid var(--border-muted);
-  background: transparent;
+  background: #081321;
 }
 
 .topbar > div:first-child {
@@ -325,6 +325,7 @@ a:hover {
   border-right: 1px solid var(--border-muted);
   border-bottom: 1px solid rgba(34, 211, 238, 0.18);
   border-left: 1px solid var(--border-muted);
+  background: #081321;
   margin-bottom: 0;
   overflow-x: auto;
 }
@@ -2385,7 +2386,7 @@ a:hover {
 .discovery-console-folded {
   display: block;
   padding: 0;
-  background: transparent;
+  background: #081321;
   border: 0;
   border-bottom: 1px solid var(--border-muted);
 }

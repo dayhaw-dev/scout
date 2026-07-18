@@ -4102,19 +4102,37 @@ function ChannelImage({
 }) {
   const [failed, setFailed] = useState(false);
   const initial = title.trim().charAt(0).toUpperCase() || "?";
+  const displaySize = size === "large" ? 56 : 42;
 
   if (!src || failed) {
     return <div className={`thumb-fallback ${size}`}>{initial}</div>;
   }
 
+  const sourceWidths = size === "large" ? [64, 128, 192] : [48, 96, 144];
+  const sizedSources = sourceWidths.map((width) => sizedYouTubeThumbnail(src, width));
+  const hasResponsiveSources = sizedSources.some((candidate) => candidate !== src);
+
   return (
     <img
-      src={src}
+      src={hasResponsiveSources ? sizedSources[1] : src}
+      srcSet={hasResponsiveSources ? sizedSources.map((candidate, index) => `${candidate} ${index + 1}x`).join(", ") : undefined}
+      width={displaySize}
+      height={displaySize}
       alt=""
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
     />
   );
+}
+
+function sizedYouTubeThumbnail(src: string, pixels: number): string {
+  try {
+    const url = new URL(src);
+    if (url.hostname !== "yt3.googleusercontent.com") return src;
+    return url.toString().replace(/=s\d+(-[^?#]*)?(?=[?#]|$)/, (_match, suffix = "") => `=s${pixels}${suffix}`);
+  } catch {
+    return src;
+  }
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) {

@@ -2573,22 +2573,24 @@ a:hover {
 }
 
 .prospect-card .card-head {
-  grid-template-columns: 52px minmax(0, 1fr) auto;
-  gap: 9px;
+  grid-template-columns: 60px minmax(0, 1fr) auto;
+  gap: 10px;
 }
 
 .prospect-card .card-head img,
 .prospect-card .thumb-fallback {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   clip-path: none;
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .prospect-card .channel-title {
   width: 100%;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   line-height: 1.1;
   white-space: nowrap;

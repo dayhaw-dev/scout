@@ -40,7 +40,8 @@ test("badge styling makes attributes quieter than stages and alerts", () => {
 
 test("score fill thresholds are 70 filled, 55 outlined, and below 55 muted", () => {
   assert.match(app, /if \(score >= 70\) return "high";\s*if \(score >= 55\) return "mid";/);
-  assert.match(styles, /\.score-high\s*\{[^}]*background: #22d3ee/s);
+  assert.match(styles, /--signal-cyan: #17d9ff;/);
+  assert.match(styles, /\.score-high\s*\{[^}]*background: var\(--signal-cyan\);[^}]*border-color: var\(--signal-cyan\);/s);
   assert.match(styles, /\.score-mid\s*\{[^}]*color: #67e8f9;[^}]*background: rgba\(7, 17, 31, 0\.44\);[^}]*border-color: rgba\(34, 211, 238, 0\.72\);[^}]*box-shadow: none/s);
   assert.match(styles, /\.score-low\s*\{[^}]*color: #9bc4d2;[^}]*background: rgba\(10, 18, 32, 0\.4\);[^}]*border-color: rgba\(143, 180, 196, 0\.16\);[^}]*box-shadow: none/s);
 });

@@ -1,6 +1,14 @@
 :root {
   --font-display: "Bahnschrift Condensed", "Arial Narrow", "Aptos Display", "Segoe UI", sans-serif;
   --font-ui: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
+  --signal-cyan: #17d9ff;
+  --action-fill: rgb(23 217 255 / 14%);
+  --action-border: #16435f;
+  --state-fill: rgb(23 217 255 / 6%);
+  --border-muted: #0e2c42;
+  --text-primary: #e8f5ff;
+  --text-muted: #7fa5c2;
+  --text-soft: #b9d4e8;
   color: #e6f7fb;
   background: #0a1220;
   font-family: var(--font-ui);
@@ -61,6 +69,22 @@ button:hover,
 .primary:hover {
   border-color: #22d3ee;
   box-shadow: 0 0 18px rgba(34, 211, 238, 0.18);
+}
+
+.primary {
+  border-color: var(--action-border);
+  background: var(--action-fill);
+  color: var(--text-primary);
+  font-weight: 800;
+  box-shadow: none;
+}
+
+.primary:hover,
+.primary:focus-visible {
+  border-color: var(--signal-cyan);
+  background: var(--action-fill);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 button:disabled {
@@ -501,9 +525,10 @@ a:hover {
   min-width: 0;
   overflow: hidden;
   padding: 0 10px;
-  border: 1px solid rgba(34, 211, 238, 0.24);
-  background: rgba(10, 18, 32, 0.72);
-  color: #bff6ff;
+  gap: 7px;
+  border: 1px solid var(--border-muted);
+  background: transparent;
+  color: var(--text-muted);
   font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -511,11 +536,25 @@ a:hover {
   clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
 }
 
+.toggle-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  background: transparent;
+  opacity: 0;
+}
+
 .toggle-chip.active {
-  border-color: #22d3ee;
-  background: #22d3ee;
-  color: #07111f;
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.16);
+  border-color: var(--action-border);
+  background: var(--state-fill);
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.toggle-chip.active::before {
+  background: var(--signal-cyan);
+  opacity: 0.7;
 }
 
 .cap-field strong {
@@ -774,8 +813,8 @@ a:hover {
 
 .score-high {
   color: #07111f;
-  background: #22d3ee;
-  border-color: #22d3ee;
+  background: var(--signal-cyan);
+  border-color: var(--signal-cyan);
   box-shadow: none;
 }
 
@@ -910,9 +949,9 @@ a:hover {
 }
 
 .primary-action {
-  color: #07111f;
-  background: #17d9ff;
-  border-color: #17d9ff;
+  color: var(--text-primary);
+  background: var(--action-fill);
+  border-color: var(--action-border);
   font-weight: 800;
   box-shadow: none;
 }
@@ -924,9 +963,12 @@ a:hover {
   box-shadow: none;
 }
 
-.primary-action:hover {
-  border-color: #67e8f9;
-  box-shadow: 0 0 12px rgba(23, 217, 255, 0.12);
+.primary-action:hover,
+.primary-action:focus-visible {
+  border-color: var(--signal-cyan);
+  background: var(--action-fill);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 .secondary-action:hover {
@@ -2372,9 +2414,9 @@ a:hover {
 }
 
 .discovery-control-row-always .toggle-chip.active {
-  border-color: #17d9ff;
-  background: #17d9ff;
-  color: #040a14;
+  border-color: var(--action-border);
+  background: var(--state-fill);
+  color: var(--text-soft);
   box-shadow: none;
 }
 

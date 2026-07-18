@@ -4,6 +4,10 @@
   --signal-cyan: #17d9ff;
   --action-fill: rgb(23 217 255 / 14%);
   --action-border: #16435f;
+  --card-action-fill: rgb(23 217 255 / 20%);
+  --card-action-fill-hover: rgb(23 217 255 / 24%);
+  --card-action-border: rgb(23 217 255 / 42%);
+  --card-action-text: #f4fbff;
   --state-fill: rgb(23 217 255 / 6%);
   --border-muted: #0e2c42;
   --text-primary: #e8f5ff;
@@ -949,9 +953,9 @@ a:hover {
 }
 
 .primary-action {
-  color: var(--text-primary);
-  background: var(--action-fill);
-  border-color: var(--action-border);
+  color: var(--card-action-text);
+  background: var(--card-action-fill);
+  border-color: var(--card-action-border);
   font-weight: 800;
   box-shadow: none;
 }
@@ -966,8 +970,8 @@ a:hover {
 .primary-action:hover,
 .primary-action:focus-visible {
   border-color: var(--signal-cyan);
-  background: var(--action-fill);
-  color: var(--text-primary);
+  background: var(--card-action-fill-hover);
+  color: var(--card-action-text);
   box-shadow: none;
 }
 

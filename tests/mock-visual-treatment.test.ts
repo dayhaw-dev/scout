@@ -64,9 +64,10 @@ test("Eyes Peeled keeps its growth chips, NO TREND state, and sparkline inside t
 });
 
 test("prospect actions and overflow follow the GENEOS hierarchy", () => {
-  assert.match(styles, /--signal-cyan: #17d9ff;[\s\S]*?--action-fill: rgb\(23 217 255 \/ 14%\);[\s\S]*?--state-fill: rgb\(23 217 255 \/ 6%\);/);
+  assert.match(styles, /--signal-cyan: #17d9ff;[\s\S]*?--action-fill: rgb\(23 217 255 \/ 14%\);[\s\S]*?--card-action-fill: rgb\(23 217 255 \/ 20%\);[\s\S]*?--card-action-border: rgb\(23 217 255 \/ 42%\);[\s\S]*?--state-fill: rgb\(23 217 255 \/ 6%\);/);
   assert.match(styles, /\.score-high \{[\s\S]*?background: var\(--signal-cyan\);[\s\S]*?border-color: var\(--signal-cyan\);/);
-  assert.match(styles, /\.primary-action \{[\s\S]*?color: var\(--text-primary\);[\s\S]*?background: var\(--action-fill\);[\s\S]*?border-color: var\(--action-border\);[\s\S]*?font-weight: 800;/);
+  assert.match(styles, /\.primary-action \{[\s\S]*?color: var\(--card-action-text\);[\s\S]*?background: var\(--card-action-fill\);[\s\S]*?border-color: var\(--card-action-border\);[\s\S]*?font-weight: 800;/);
+  assert.match(styles, /\.primary-action:hover,[\s\S]*?background: var\(--card-action-fill-hover\);/);
   assert.match(styles, /\.primary \{[\s\S]*?background: var\(--action-fill\);[\s\S]*?font-weight: 800;/);
   assert.match(styles, /\.toggle-chip\.active \{[\s\S]*?background: var\(--state-fill\);[\s\S]*?color: var\(--text-soft\);[\s\S]*?box-shadow: none;/);
   assert.match(styles, /\.toggle-chip\.active::before \{[\s\S]*?background: var\(--signal-cyan\);[\s\S]*?opacity: 0\.7;/);

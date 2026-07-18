@@ -1217,7 +1217,7 @@ function StageView({
           onReject={(channel) => void patchStatus(channel, "rejected")}
         />
       ) : (
-        <div className="card-grid">
+        <div className="card-grid channel-card-grid">
           {visible.map((channel) => (
             <ChannelCard
               key={channel.channel_id}
@@ -1517,7 +1517,7 @@ function OutreachView({
       {loading ? <Loading /> : working.length === 0 ? (
         <EmptyState title="No active relationships" detail="Add a channel above or mark it ACTIVE from an Outreach card." />
       ) : (
-        <div className="card-grid">
+        <div className="card-grid channel-card-grid">
           {working.map((channel) => (
             <ChannelCard
               key={channel.channel_id}
@@ -1543,7 +1543,7 @@ function OutreachView({
       {!loading && (live.length === 0 ? (
         <EmptyState title="No live outreach" detail="Log outreach from a Shortlist card to start follow-up tracking." />
       ) : (
-        <div className="card-grid">
+        <div className="card-grid channel-card-grid">
           {live.map((channel) => (
             <ChannelCard
               key={channel.channel_id}
@@ -1571,7 +1571,7 @@ function OutreachView({
         {closed.length === 0 ? (
           <EmptyState title="No closed outreach" detail="SIGNED and PASSED channels will collect here." />
         ) : (
-          <div className="card-grid">
+          <div className="card-grid channel-card-grid">
             {closed.map((channel) => (
               <ChannelCard
                 key={channel.channel_id}
@@ -2150,7 +2150,7 @@ function SearchView({
           <EmptyState title="Ready for a query" detail="Enter a niche keyword and SCOUT will resolve candidates into the funnel." />
         )
       ) : (
-        <div className="card-grid compact-grid">
+        <div className="card-grid compact-grid channel-card-grid">
           {candidates.map((channel) => (
             <ChannelCard
               key={channel.channel_id}

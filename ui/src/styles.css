@@ -800,6 +800,16 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
+.channel-card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 336px));
+  align-items: start;
+  justify-content: start;
+}
+
+.channel-card-grid.compact-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 336px));
+}
+
 .channel-card {
   background: #0f1b2e;
   border: 1px solid rgba(34, 211, 238, 0.2);
@@ -2670,7 +2680,7 @@ a:hover {
   position: relative;
   isolation: isolate;
   min-height: 0;
-  align-self: stretch;
+  align-self: start;
   border: 0;
   background: transparent;
   padding: 9px 11px 10px;

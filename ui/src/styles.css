@@ -1,9 +1,12 @@
 :root {
+  --font-display: "Bahnschrift Condensed", "Arial Narrow", "Aptos Display", "Segoe UI", sans-serif;
+  --font-ui: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
   color: #e6f7fb;
   background: #0a1220;
-  font-family: "Bahnschrift", "DIN Alternate", "Arial Narrow", sans-serif;
+  font-family: var(--font-ui);
   font-synthesis: none;
-  text-rendering: geometricPrecision;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -24,6 +27,23 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+button,
+.wordmark,
+.tabs,
+.channel-title,
+.score,
+.chip,
+.field-label,
+.stat-module,
+.stat-block strong,
+.stage-heading strong,
+.seed-garden-stats strong,
+.seed-section-heading,
+.seed-row-stat strong,
+.closed-section summary {
+  font-family: var(--font-display);
 }
 
 button,

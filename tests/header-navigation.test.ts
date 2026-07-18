@@ -20,7 +20,7 @@ test("inactive tab labels and counts recede while the active tab keeps the cyan 
   assert.match(styles, /\.tabs button strong \{[\s\S]*?color: #587888/);
   assert.match(styles, /\.tab-shelf-library \.tab-shelf-label \{[\s\S]*?color: #496a79/);
   assert.match(styles, /\.tab-shelf-library button strong \{[\s\S]*?color: #496a79/);
-  assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: #081321;[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff/);
+  assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: var\(--surface-strong\);[\s\S]*?border: 1px solid #16435f;[\s\S]*?border-bottom: 2px solid #17d9ff/);
   assert.match(styles, /\.tabs button\.active strong \{[\s\S]*?color: #7fa5c2/);
   assert.match(styles, /\.tab-shelf-library button\.active strong \{[\s\S]*?color: #7fa5c2/);
   assert.match(styles, /\.stat-module span \{[\s\S]*?color: #7fa5c2/);

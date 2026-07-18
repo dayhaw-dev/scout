@@ -188,7 +188,7 @@ a:hover {
   display: grid;
   align-content: center;
   height: 64px;
-  background: #081321;
+  background: var(--surface-strong);
   border: 1px solid #16435f;
   padding: 7px 10px;
 }
@@ -374,7 +374,7 @@ a:hover {
 
 .tabs button.active {
   color: #e8f5ff;
-  background: #081321;
+  background: var(--surface-strong);
   border: 1px solid #16435f;
   border-bottom: 2px solid #17d9ff;
   clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);

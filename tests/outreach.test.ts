@@ -63,7 +63,8 @@ test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status 
   assert.match(source, /STALE/);
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
   assert.doesNotMatch(source, /daysFromNowInput/);
-  assert.match(source, /Closed \(\{closed\.length\}\)/);
+  assert.match(source, /Closed — \{closed\.length\}/);
+  assert.match(source, /Signed \{closedCounts\.signed\} · Passed \{closedCounts\.passed\}/);
   assert.doesNotMatch(source, /ghosted/);
 });
 

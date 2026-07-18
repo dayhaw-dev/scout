@@ -1197,6 +1197,10 @@ function OutreachView({
   } | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [rosterBusy, setRosterBusy] = useState(false);
+  const closedCounts = useMemo(() => ({
+    signed: closed.filter((channel) => channel.outreach_status === "signed").length,
+    passed: closed.filter((channel) => channel.outreach_status === "passed").length,
+  }), [closed]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1378,13 +1382,9 @@ function OutreachView({
     <section className="view">
       <div className="stage-heading clipped">
         <strong>Active / working with</strong>
-        <span>Current brand relationships, independent of outreach funnel status.</span>
+        <span>Roster + live brand relationships — independent of funnel status. Funnel position rides as a chip.</span>
       </div>
       <form className="roster-add clipped" onSubmit={(event) => void submitRoster(event)}>
-        <div className="roster-add-copy">
-          <strong>Add to roster</strong>
-          <span>Existing SCOUT channels cost 0 credits. New channels require a confirmed lookup.</span>
-        </div>
         <div className="roster-add-controls">
           <input
             value={rosterInput}
@@ -1397,9 +1397,10 @@ function OutreachView({
             aria-label="YouTube channel URL or handle"
             disabled={rosterBusy}
           />
-          <button type="submit" disabled={rosterBusy || !rosterInput.trim()}>
+          <button className="primary" type="submit" disabled={rosterBusy || !rosterInput.trim()}>
             {rosterBusy ? "Checking..." : "Add to roster"}
           </button>
+          <span className="roster-cost-note">Existing SCOUT channels 0 CR · New channels need a confirmed lookup</span>
         </div>
         {rosterConfirmation && (
           <div className="roster-confirmation">
@@ -1466,7 +1467,11 @@ function OutreachView({
         </div>
       ))}
       <details className="closed-section clipped">
-        <summary>Closed ({closed.length})</summary>
+        <summary>
+          <strong>Closed — {closed.length}</strong>
+          <span>Signed {closedCounts.signed} · Passed {closedCounts.passed}</span>
+          <em>Expand</em>
+        </summary>
         {closed.length === 0 ? (
           <EmptyState title="No closed outreach" detail="SIGNED and PASSED channels will collect here." />
         ) : (
@@ -2377,14 +2382,14 @@ function ChannelCard({
         <CardStat label="spons" value={compactSponsorStatValue(sponsorStats)} title={sponsorStatTitle(sponsorStats)} className={sponsorStats.state === "found" ? undefined : `muted-stat sponsor-${sponsorStats.state}`} />
       </div>
       <div className="status-chip-row">
+        {tab === "outreach" && channel.outreach_status && channel.outreach_status !== "none" && (
+          <span className="chip badge-stage outreach-chip">{outreachLabel(channel.outreach_status)}</span>
+        )}
         {channel.kind === "brand" && <span className="chip badge-attribute kind-brand">BRAND</span>}
         {hotChannel(channel) && <span className="chip badge-alert hot-chip">HOT</span>}
         {newArrival && <span className="chip badge-alert new-chip">NEW</span>}
         {channel.woke_at && channel.status === "candidate" && <span className="chip badge-alert woke-chip">WOKE</span>}
         {channel.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
-        {tab === "outreach" && channel.outreach_status && channel.outreach_status !== "none" && (
-          <span className="chip badge-stage outreach-chip">{outreachLabel(channel.outreach_status)}</span>
-        )}
         <GrowthChipItems row={channel} />
       </div>
       {provenanceItems.length > 0 && (

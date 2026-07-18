@@ -664,13 +664,13 @@ a:hover {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 14px;
   align-items: stretch;
 }
 
 .compact-grid {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
 .channel-card {
@@ -2140,7 +2140,7 @@ a:hover {
   position: relative;
   isolation: isolate;
   min-height: 0;
-  align-self: start;
+  align-self: stretch;
   border: 0;
   background: transparent;
   padding: 9px 11px 10px;
@@ -2261,12 +2261,8 @@ a:hover {
 }
 
 .prospect-card .status-chip-row {
-  min-height: 0;
+  min-height: 18px;
   gap: 4px;
-}
-
-.prospect-card .status-chip-row:empty {
-  display: none;
 }
 
 .stat-block.signal-stat strong,

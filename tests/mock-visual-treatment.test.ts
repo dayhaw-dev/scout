@@ -13,12 +13,17 @@ test("mock treatment keeps tabs flat and containers hairline", () => {
 });
 
 test("prospect treatment stays compact and flat", () => {
-  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 0;[\s\S]*?align-self: start;[\s\S]*?padding: 9px 11px 10px;[\s\S]*?gap: 4px;/);
+  assert.match(styles, /\.prospect-card \{[\s\S]*?min-height: 0;[\s\S]*?align-self: stretch;[\s\S]*?padding: 9px 11px 10px;[\s\S]*?gap: 4px;/);
   assert.match(styles, /\.prospect-card::before,[\s\S]*?calc\(100% - 7px\)/);
   assert.match(styles, /\.prospect-card \.score \{[\s\S]*?width: 46px;[\s\S]*?box-shadow: none;/);
-  assert.match(styles, /\.prospect-card \.status-chip-row:empty \{[\s\S]*?display: none;/);
+  assert.match(styles, /\.prospect-card \.status-chip-row \{[\s\S]*?min-height: 18px;/);
   assert.match(styles, /\.prospect-card \.provenance-line \{[\s\S]*?min-height: 0;/);
   assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?padding-top: 0;/);
+});
+
+test("prospect grids fill available width and keep row heights aligned", () => {
+  assert.match(styles, /\.card-grid \{[\s\S]*?repeat\(auto-fit, minmax\(min\(300px, 100%\), 1fr\)\)[\s\S]*?align-items: stretch;/);
+  assert.match(styles, /\.compact-grid \{[\s\S]*?repeat\(auto-fit, minmax\(min\(280px, 100%\), 1fr\)\)/);
 });
 
 test("Pool cards emphasize stat values and restore contained thumbnails", () => {

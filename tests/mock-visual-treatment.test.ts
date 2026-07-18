@@ -36,6 +36,15 @@ test("Pool cards emphasize stat values and restore contained thumbnails", () => 
   assert.match(styles, /\.prospect-card \.card-head img,[\s\S]*?width: 48px;[\s\S]*?height: 48px;[\s\S]*?border-radius: 50%;/);
 });
 
+test("prospect headers truncate uniformly and action baselines ignore optional chips", () => {
+  assert.match(app, /className="channel-title"[\s\S]*?title=\{channel\.title \?\? channel\.channel_id\}/);
+  assert.match(styles, /\.prospect-card \.channel-title \{[\s\S]*?font-size: 16px;[\s\S]*?white-space: nowrap;[\s\S]*?text-overflow: ellipsis;/);
+  assert.match(styles, /\.prospect-card \.card-identity \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
+  assert.match(styles, /\.prospect-card \.card-actions \{[\s\S]*?margin-top: auto;[\s\S]*?gap: 6px;/);
+  assert.match(styles, /\.prospect-card \.primary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?padding-inline: 14px;/);
+  assert.match(styles, /\.prospect-card \.secondary-action \{[\s\S]*?flex: 0 0 auto;[\s\S]*?padding-inline: 12px;/);
+});
+
 test("prospect actions and overflow follow the GENEOS hierarchy", () => {
   assert.match(styles, /\.primary-action \{[\s\S]*?background: #17d9ff;[\s\S]*?font-weight: 800;/);
   assert.match(styles, /\.secondary-action \{[\s\S]*?color: #d98994;[\s\S]*?background: transparent;/);

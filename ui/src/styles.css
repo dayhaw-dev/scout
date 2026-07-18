@@ -2257,8 +2257,18 @@ a:hover {
 }
 
 .prospect-card .channel-title {
-  font-size: 15px;
+  width: 100%;
+  font-size: 16px;
   font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prospect-card .card-identity {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .prospect-card .card-identity .muted {
@@ -2373,15 +2383,19 @@ a:hover {
 }
 
 .prospect-card .card-actions {
+  margin-top: auto;
   padding-top: 0;
+  gap: 6px;
 }
 
 .prospect-card .primary-action {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  padding-inline: 14px;
 }
 
 .prospect-card .secondary-action {
   flex: 0 0 auto;
+  padding-inline: 12px;
 }
 
 .score-popover-anchor {

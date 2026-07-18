@@ -2382,7 +2382,13 @@ function ChannelCard({
           size="large"
         />
         <div className="card-identity">
-          <a className="channel-title" href={`https://youtube.com/channel/${channel.channel_id}`} target="_blank" rel="noreferrer">
+          <a
+            className="channel-title"
+            href={`https://youtube.com/channel/${channel.channel_id}`}
+            target="_blank"
+            rel="noreferrer"
+            title={channel.title ?? channel.channel_id}
+          >
             {channel.title ?? channel.channel_id}
           </a>
           <div className="muted">{channel.handle ? `@${channel.handle}` : "no handle"}</div>

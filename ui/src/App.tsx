@@ -30,6 +30,7 @@ type Tab = StageTab | "outreach" | "seeds" | "brands";
 type SortMode = "score" | "growth" | "wake" | "subs_desc" | "subs_asc";
 type SeedSortMode = "unmined" | "yield" | "latest_upload";
 type PoolDensity = "cards" | "rows";
+type DiscoveryLibraryKey = "topics" | "content" | "saved";
 type GateState = "idle" | "checking" | "denied" | "success" | "cooldown";
 type ToastState = {
   message: string;
@@ -397,6 +398,7 @@ function StageView({
   const [sort, setSort] = useState<SortMode>(stage === "shortlist" ? "score" : initialFilters.sort);
   const [filtersOpen, setFiltersOpen] = useState(initialFilters.filtersOpen);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [openDiscoveryLibrary, setOpenDiscoveryLibrary] = useState<DiscoveryLibraryKey | null>(null);
   const [density, setDensity] = useState<PoolDensity>(() => sessionStorage.getItem("scout_pool_density") === "rows" ? "rows" : "cards");
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialFilters.searchQuery);
@@ -970,6 +972,19 @@ function StageView({
                 <button className="primary" type="submit" disabled={bulk.active || !searchQuery.trim()}>
                   {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
                 </button>
+                {discoveryOpen && deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
+                  <div className="variant-row discovery-query-variants">
+                    <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
+                    {currentSanitizedVariants.variants.map((variant) => (
+                      <span className="suggestion-chip" key={variant}>
+                        <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
+                        <button className="suggestion-dismiss" type="button" aria-label={`Remove ${variant}`} title="Remove variant" onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}>
+                          x
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <span className="discovery-parameter-echo">
                 {searchParameterEcho(uploadedWithin, searchMinSubs, searchMaxResolves, deepSearch, autoEnrich, autoScan, searchCreditCapLabel)}
@@ -977,7 +992,15 @@ function StageView({
               <span className="discovery-library-count">
                 {suggestions.length + contentSuggestions.length} topics / {searches.length} saved queries
               </span>
-              <button className="discovery-expand" type="button" aria-expanded={discoveryOpen} onClick={() => setDiscoveryOpen((value) => !value)}>
+              <button
+                className="discovery-expand"
+                type="button"
+                aria-expanded={discoveryOpen}
+                onClick={() => {
+                  if (discoveryOpen) setOpenDiscoveryLibrary(null);
+                  setDiscoveryOpen((value) => !value);
+                }}
+              >
                 {discoveryOpen ? "Collapse" : "Expand"}
               </button>
             </div>
@@ -1037,19 +1060,6 @@ function StageView({
                     <strong>{searchCreditCapLabel}</strong>
                   </div>
                 </div>
-                {deepSearch && (deepVariantsLoading || currentSanitizedVariants.variants.length > 0) && (
-                  <div className="variant-row">
-                    <span>{deepVariantsLoading ? "VARIANTS..." : `VARIANTS${deepVariantSource ? ` / ${deepVariantSource}` : ""}`}</span>
-                    {currentSanitizedVariants.variants.map((variant) => (
-                      <span className="suggestion-chip" key={variant}>
-                        <button type="button" onClick={() => setSearchQuery(variant)}>{variant}</button>
-                        <button className="suggestion-dismiss" type="button" aria-label={`Remove ${variant}`} title="Remove variant" onClick={() => setDeepVariants((items) => items.filter((item) => normalizeQuery(item) !== normalizeQuery(variant)))}>
-                          x
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
                 <SuggestionRows
                   topics={suggestions}
                   content={contentSuggestions}
@@ -1057,8 +1067,14 @@ function StageView({
                   onDismiss={(term) => void dismissSuggestion(term)}
                   searchedTerms={searchedTerms}
                   onLowPool={onOpenSeeds}
+                  openPanel={openDiscoveryLibrary}
+                  onOpenPanel={setOpenDiscoveryLibrary}
                 />
-                <SavedSearchesPanel searches={searches} />
+                <SavedSearchesPanel
+                  searches={searches}
+                  open={openDiscoveryLibrary === "saved"}
+                  onToggle={() => setOpenDiscoveryLibrary((value) => value === "saved" ? null : "saved")}
+                />
               </div>
             )}
           </form>
@@ -3513,6 +3529,8 @@ function SuggestionRows({
   onDismiss,
   searchedTerms,
   onLowPool,
+  openPanel,
+  onOpenPanel,
 }: {
   topics: SearchSuggestion[];
   content: SearchSuggestion[];
@@ -3520,6 +3538,8 @@ function SuggestionRows({
   onDismiss: (term: string) => void;
   searchedTerms: Set<string>;
   onLowPool: () => void;
+  openPanel: DiscoveryLibraryKey | null;
+  onOpenPanel: (panel: DiscoveryLibraryKey | null) => void;
 }) {
   const topicGroups = splitSearchedSuggestions(topics, searchedTerms);
   const contentGroups = splitSearchedSuggestions(content, searchedTerms);
@@ -3527,27 +3547,50 @@ function SuggestionRows({
 
   return (
     <div className="suggestion-rows">
-      <DiscoverySuggestionPanel label="TOPICS" suggestions={topics} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
-      <DiscoverySuggestionPanel label="CONTENT" suggestions={content} onPick={onPick} onDismiss={onDismiss} searchedTerms={searchedTerms} />
+      <DiscoverySuggestionPanel
+        panelKey="topics"
+        label="TOPICS"
+        suggestions={topics}
+        onPick={onPick}
+        onDismiss={onDismiss}
+        searchedTerms={searchedTerms}
+        open={openPanel === "topics"}
+        onToggle={() => onOpenPanel(openPanel === "topics" ? null : "topics")}
+      />
+      <DiscoverySuggestionPanel
+        panelKey="content"
+        label="CONTENT"
+        suggestions={content}
+        onPick={onPick}
+        onDismiss={onDismiss}
+        searchedTerms={searchedTerms}
+        open={openPanel === "content"}
+        onToggle={() => onOpenPanel(openPanel === "content" ? null : "content")}
+      />
       {unsearchedCount < 5 && <QueryPoolPrompt onOpenSeeds={onLowPool} />}
     </div>
   );
 }
 
 function DiscoverySuggestionPanel({
+  panelKey,
   label,
   suggestions,
   onPick,
   onDismiss,
   searchedTerms,
+  open,
+  onToggle,
 }: {
+  panelKey: "topics" | "content";
   label: "TOPICS" | "CONTENT";
   suggestions: SearchSuggestion[];
   onPick: (term: string) => void;
   onDismiss: (term: string) => void;
   searchedTerms: Set<string>;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [hideSearched, setHideSearched] = useState(true);
   const searchedCount = suggestions.filter((suggestion) => searchedTerms.has(normalizeChipTerm(suggestion.term))).length;
@@ -3559,13 +3602,13 @@ function DiscoverySuggestionPanel({
   });
 
   return (
-    <section className="discovery-library-panel">
+    <section className="discovery-library-panel" data-library-panel={panelKey}>
       <div className="discovery-library-summary">
         <div>
           <strong>{label}</strong>
           <span>{suggestions.length} available{searchedCount > 0 ? ` / ${searchedCount} searched` : ""}</span>
         </div>
-        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={suggestions.length === 0}>
+        <button type="button" aria-expanded={open} onClick={onToggle} disabled={suggestions.length === 0}>
           {open ? "Hide" : "Show"}
         </button>
       </div>
@@ -3612,20 +3655,19 @@ function DiscoverySuggestionPanel({
   );
 }
 
-function SavedSearchesPanel({ searches }: { searches: SearchRecord[] }) {
-  const [open, setOpen] = useState(false);
+function SavedSearchesPanel({ searches, open, onToggle }: { searches: SearchRecord[]; open: boolean; onToggle: () => void }) {
   const [filter, setFilter] = useState("");
   const normalizedFilter = normalizeChipTerm(filter);
   const visibleSearches = searches.filter((search) => !normalizedFilter || normalizeChipTerm(search.query).includes(normalizedFilter));
 
   return (
-    <section className="discovery-library-panel saved-searches-panel">
+    <section className="discovery-library-panel saved-searches-panel" data-library-panel="saved">
       <div className="discovery-library-summary">
         <div>
           <strong>SAVED SEARCHES</strong>
           <span>{searches.length} executed</span>
         </div>
-        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={searches.length === 0}>
+        <button type="button" aria-expanded={open} onClick={onToggle} disabled={searches.length === 0}>
           {open ? "Hide" : "Show"}
         </button>
       </div>

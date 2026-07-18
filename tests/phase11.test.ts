@@ -31,8 +31,8 @@ test("phase 11 exposes title-mined content suggestions and seed query chips", ()
   assert.match(source, /query_phrases/);
   assert.doesNotMatch(source, /content_suggestions: aggregateTitleQuerySuggestions/);
   assert.match(app, /<SuggestionRows/);
-  assert.match(app, /<DiscoverySuggestionPanel label="TOPICS"/);
-  assert.match(app, /<DiscoverySuggestionPanel label="CONTENT"/);
+  assert.match(app, /<DiscoverySuggestionPanel[\s\S]*?panelKey="topics"[\s\S]*?label="TOPICS"/);
+  assert.match(app, /<DiscoverySuggestionPanel[\s\S]*?panelKey="content"[\s\S]*?label="CONTENT"/);
   assert.match(app, /hideSearched && searched/);
   assert.match(app, /Show searched \(\$\{searchedCount\}\)/);
   assert.match(app, /Query pool low\. Regen from seeds/);

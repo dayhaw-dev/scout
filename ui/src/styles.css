@@ -488,6 +488,12 @@ a:hover {
   min-height: 38px;
 }
 
+.discovery-query-variants {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-top: 2px;
+}
+
 .toggle-chip {
   display: inline-flex;
   align-items: center;

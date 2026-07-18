@@ -25,7 +25,7 @@ test("discovery console folds to one line and restores controls plus query sourc
   assert.match(app, /searchParameterEcho\(/);
   assert.match(app, /aria-expanded=\{discoveryOpen\}/);
   assert.match(app, /<SuggestionRows/);
-  assert.match(app, /<SavedSearchesPanel searches=\{searches\} \/>/);
+  assert.match(app, /<SavedSearchesPanel[\s\S]*?searches=\{searches\}[\s\S]*?open=\{openDiscoveryLibrary === "saved"\}/);
   assert.match(app, /label="TOPICS"/);
   assert.match(app, /label="CONTENT"/);
   assert.match(app, /const \[hideSearched, setHideSearched\] = useState\(true\)/);
@@ -35,6 +35,24 @@ test("discovery console folds to one line and restores controls plus query sourc
   assert.match(styles, /\.discovery-expanded/);
   assert.match(styles, /\.discovery-chip-viewport,[\s\S]*?max-height: 176px;[\s\S]*?overflow: auto;/);
   assert.match(styles, /\.discovery-expanded \.discovery-field \{[\s\S]*?border: 1px solid[\s\S]*?background: transparent;/);
+});
+
+test("deep variants stay with the keyword and discovery libraries share one accordion", () => {
+  const keywordIndex = app.indexOf('className="keyword-control"');
+  const variantIndex = app.indexOf('className="variant-row discovery-query-variants"');
+  const expandedIndex = app.indexOf('className="discovery-expanded"');
+  const controlIndex = app.indexOf('className="discovery-control-row"');
+  assert.ok(keywordIndex >= 0 && keywordIndex < variantIndex, "variants render inside the keyword stack");
+  assert.ok(variantIndex < expandedIndex && expandedIndex < controlIndex, "variants render before the parameter and library panel");
+  assert.match(app, /discovery-query-variants[\s\S]*?aria-label=\{`Remove \$\{variant\}`\}/);
+  assert.match(styles, /\.discovery-query-variants \{[\s\S]*?grid-column: 1 \/ -1;/);
+
+  assert.match(app, /type DiscoveryLibraryKey = "topics" \| "content" \| "saved"/);
+  assert.match(app, /const \[openDiscoveryLibrary, setOpenDiscoveryLibrary\] = useState<DiscoveryLibraryKey \| null>\(null\)/);
+  assert.match(app, /open=\{openPanel === "topics"\}/);
+  assert.match(app, /open=\{openPanel === "content"\}/);
+  assert.match(app, /open=\{openDiscoveryLibrary === "saved"\}/);
+  assert.match(app, /value === "saved" \? null : "saved"/);
 });
 
 test("Pool density toggle provides 40px rows and guarded S-X triage", () => {

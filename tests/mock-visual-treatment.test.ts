@@ -10,6 +10,10 @@ test("mock treatment keeps tabs flat and containers hairline", () => {
   assert.match(styles, /\.tabs button\.active \{[\s\S]*?background: transparent;[\s\S]*?border-bottom-color: #22d3ee;/);
   assert.match(styles, /\.stat-module \{[\s\S]*?background: transparent;[\s\S]*?border: 1px solid/);
   assert.match(styles, /\.discovery-console-folded \{[\s\S]*?background: transparent;/);
+  assert.match(styles, /\.topbar \{[\s\S]*?min-height: 90px;[\s\S]*?border: 1px solid var\(--border-muted\);/);
+  assert.match(styles, /\.stat-module \{[\s\S]*?height: 64px;[\s\S]*?border: 1px solid var\(--border-muted\);/);
+  assert.match(styles, /\.tabs \{[\s\S]*?min-height: 49px;[\s\S]*?margin-bottom: 0;/);
+  assert.match(app, /className="pipeline-value"[\s\S]*?POOL · SHORT · OUT/);
 });
 
 test("prospect treatment stays compact and flat", () => {
@@ -75,7 +79,7 @@ test("prospect actions and overflow follow the GENEOS hierarchy", () => {
   assert.match(styles, /\.toggle-chip\.active \{[\s\S]*?background: var\(--state-fill\);[\s\S]*?color: var\(--text-soft\);[\s\S]*?box-shadow: none;/);
   assert.match(styles, /\.toggle-chip\.active::before \{[\s\S]*?background: var\(--signal-cyan\);[\s\S]*?opacity: 0\.7;/);
   assert.doesNotMatch(styles, /\.primary-action \{[^}]*background: (?:#17d9ff|#22d3ee);/s);
-  assert.doesNotMatch(styles, /\.discovery-advanced-row \.toggle-chip(?:\.active)? \{[^}]*background: (?:#17d9ff|#22d3ee);/s);
+  assert.doesNotMatch(styles, /\.discovery-parameter-grid \.toggle-chip(?:\.active)? \{[^}]*background: (?:#17d9ff|#22d3ee);/s);
   assert.match(styles, /\.secondary-action \{[\s\S]*?color: #d98994;[\s\S]*?background: transparent;/);
   assert.match(styles, /\.overflow-list \{[\s\S]*?border: 1px solid #16435f;[\s\S]*?background: rgba\(2, 6, 13, 0\.98\);/);
   assert.match(app, /label: "Pipeline"[\s\S]*?label: "Identity"[\s\S]*?label: "Intelligence"/);

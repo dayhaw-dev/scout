@@ -23,6 +23,8 @@ import {
 } from "./api";
 import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, REACH_CONFIG } from "./config";
+import { loadDiscoveryDefaults, saveDiscoveryDefaults } from "./discovery-defaults";
+import type { DiscoveryDefaults, SearchCreditCapMode, UploadWindow } from "./discovery-defaults";
 import { seedFreshnessPacingMs } from "./seed-freshness";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
@@ -157,16 +159,18 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
+        <div className="header-brand">
           <div className="wordmark">SCOUT</div>
           <div className="subline">Channel discovery pipeline</div>
         </div>
-        <StatusStrip status={status} live={bulkActive} />
-        {adminKey && (
-          <button className="lock-button" onClick={lock} title="Lock session">
-            LOCK
-          </button>
-        )}
+        <div className="header-instruments">
+          <StatusStrip status={status} live={bulkActive} />
+          {adminKey && (
+            <button className="lock-button" onClick={lock} title="Lock session">
+              LOCK
+            </button>
+          )}
+        </div>
       </header>
 
       <nav className="tabs tab-shelves" aria-label="SCOUT views">
@@ -329,7 +333,7 @@ function StatusStrip({ status, live }: { status: StatusPayload | null; live: boo
   const [lastCredits, setLastCredits] = useState<number | null>(status?.credits_remaining ?? null);
   const pool = status?.channel_counts.pool ?? 0;
   const shortlisted = status?.channel_counts.shortlist ?? 0;
-  const watchlist = status?.channel_counts.by_status.watchlist ?? 0;
+  const outreach = status?.channel_counts.outreach_total ?? 0;
   const creditsAsOf = status?.credits_remaining_updated_at ?? null;
   const lastRun = status?.last_run ?? null;
 
@@ -350,18 +354,23 @@ function StatusStrip({ status, live }: { status: StatusPayload | null; live: boo
       >
         <span>CREDITS</span>
         <strong>{status?.credits_remaining ?? "?"}</strong>
-        <em>{live ? "as of just now" : creditsAsOf ? `as of ${relativeTime(creditsAsOf)}` : "as of unknown"}</em>
-        <small>{status?.requests_today ?? 0} spent today</small>
+        <small>
+          <em>{live ? "now" : creditsAsOf ? relativeTimeCompact(creditsAsOf) : "unknown"}</em>
+          <i aria-hidden="true">{"\u00b7"}</i>
+          {status?.requests_today ?? 0} spent today
+        </small>
       </div>
       <div className="stat-module pipeline-module clipped">
         <span>PIPELINE</span>
-        <p>
-          <strong>{pool}</strong> pool <i>-</i> <strong>{shortlisted}</strong> shortlist <i>-</i> <strong>{watchlist}</strong> eyes
+        <p className="pipeline-value">
+          <strong>{pool}</strong><i>|</i><strong>{shortlisted}</strong><i>/</i><strong>{outreach}</strong>
         </p>
+        <small>POOL · SHORT · OUT</small>
       </div>
       <div className="stat-module last-run-module clipped">
         <span>LAST RUN</span>
-        <p>{lastRun ? `${lastRun.kind.toUpperCase()} ${relativeTime(lastRun.at)}` : "NONE"}</p>
+        <p>{lastRun ? relativeTimeCompact(lastRun.at) : "NONE"}</p>
+        <small>{lastRun ? lastRun.kind.toUpperCase() : "NO RUN"}</small>
       </div>
     </div>
   );
@@ -387,6 +396,7 @@ function StageView({
   onOpenSeeds: () => void;
 }) {
   const initialFilters = useMemo(() => initialShortlistFilters(), []);
+  const [discoveryDefaults] = useState<DiscoveryDefaults>(() => loadDiscoveryDefaults(window.localStorage));
   const [channels, setChannels] = useState<ChannelCardRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [minScore, setMinScore] = useState(initialFilters.minScore);
@@ -402,17 +412,18 @@ function StageView({
   const [density, setDensity] = useState<PoolDensity>(() => sessionStorage.getItem("scout_pool_density") === "rows" ? "rows" : "cards");
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialFilters.searchQuery);
-  const [uploadedWithin, setUploadedWithin] = useState("");
-  const [searchMaxResolves, setSearchMaxResolves] = useState(10);
-  const [searchMinSubs, setSearchMinSubs] = useState(5000);
+  const [uploadedWithin, setUploadedWithin] = useState<UploadWindow>(discoveryDefaults.uploadedWithin);
+  const [searchMaxResolves, setSearchMaxResolves] = useState(discoveryDefaults.maxResolves);
+  const [searchMinSubs, setSearchMinSubs] = useState(discoveryDefaults.minSubs);
   const [searchSummary, setSearchSummary] = useState<SearchSummary | null>(null);
   const [searches, setSearches] = useState<SearchRecord[]>([]);
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [contentSuggestions, setContentSuggestions] = useState<SearchSuggestion[]>([]);
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
-  const [deepSearch, setDeepSearch] = useState(false);
-  const [autoEnrich, setAutoEnrich] = useState(true);
-  const [autoScan, setAutoScan] = useState(true);
+  const [deepSearch, setDeepSearch] = useState(discoveryDefaults.deepSearch);
+  const [autoEnrich, setAutoEnrich] = useState(discoveryDefaults.autoEnrich);
+  const [autoScan, setAutoScan] = useState(discoveryDefaults.autoScan);
+  const [searchCreditCapMode, setSearchCreditCapMode] = useState<SearchCreditCapMode>(discoveryDefaults.creditCap);
   const [deepVariants, setDeepVariants] = useState<string[]>([]);
   const [deepVariantsLoading, setDeepVariantsLoading] = useState(false);
   const [deepVariantSource, setDeepVariantSource] = useState<"llm" | "mixed" | "fallback" | null>(null);
@@ -850,7 +861,7 @@ function StageView({
       ? sanitizeDeepSearchVariants(query, deepVariants)
       : { variants: [], dropped: [] };
     const baseQueries = deepSearch ? [query, ...sanitizedVariants.variants].filter(Boolean) : [query];
-    const plan = searchPlanForCap(baseQueries, searchMaxResolves, autoEnrich, deepSearch ? 40 : Number.POSITIVE_INFINITY);
+    const plan = searchPlanForCap(baseQueries, searchMaxResolves, autoEnrich, searchCreditCapMode === "40" ? 40 : Number.POSITIVE_INFINITY);
     const controller = bulk.start();
     try {
       const variantSummaries: SearchSummary[] = [];
@@ -947,6 +958,31 @@ function StageView({
     }
   }
 
+  function toggleDeepSearch() {
+    setDeepSearch((value) => {
+      const next = !value;
+      setSearchCreditCapMode(next ? "40" : "none");
+      return next;
+    });
+  }
+
+  function saveCurrentDiscoveryDefaults() {
+    try {
+      saveDiscoveryDefaults(window.localStorage, {
+        uploadedWithin,
+        minSubs: searchMinSubs,
+        maxResolves: searchMaxResolves,
+        deepSearch,
+        autoEnrich,
+        autoScan,
+        creditCap: searchCreditCapMode,
+      });
+      onToast({ message: "Discovery defaults saved for this browser." });
+    } catch {
+      onToast({ message: "Could not save discovery defaults in this browser." });
+    }
+  }
+
   const currentSanitizedVariants = deepSearch
     ? sanitizeDeepSearchVariants(searchQuery, deepVariants)
     : { variants: [], dropped: [] };
@@ -954,11 +990,12 @@ function StageView({
     deepSearch ? [searchQuery.trim(), ...currentSanitizedVariants.variants].filter(Boolean) : [searchQuery.trim()].filter(Boolean),
     searchMaxResolves,
     autoEnrich,
-    deepSearch ? 40 : Number.POSITIVE_INFINITY,
+    searchCreditCapMode === "40" ? 40 : Number.POSITIVE_INFINITY,
   );
   const currentSearchMaxCost = searchPlanMaxCost(currentSearchPlan.queries.length, currentSearchPlan.maxResolves, autoEnrich);
-  const searchCreditCap = deepSearch ? 40 : null;
+  const searchCreditCap = searchCreditCapMode === "40" ? 40 : null;
   const searchCreditCapLabel = searchCreditCap && searchCreditCap > 0 ? `${searchCreditCap} credits` : "NO CAP";
+  const uploadedWithinLabel = uploadWindowLabel(uploadedWithin);
   const activeFilterCount = [
     minScore > 0,
     Boolean(minSubs),
@@ -982,56 +1019,17 @@ function StageView({
                   {bulk.active && bulk.progress?.action.toLowerCase().includes("search") ? <><Spinner /> Running</> : "Run"}
                 </button>
               </div>
-              <div className="discovery-inline-controls" aria-label="Frequent discovery controls">
-                <button
-                  type="button"
-                  className={`toggle-chip deep-compact ${deepSearch ? "active" : ""}`}
-                  aria-pressed={deepSearch}
-                  title="expands search with 4 query variants"
-                  onClick={() => setDeepSearch((value) => !value)}
-                >
-                  DEEP
-                </button>
-                <label className="discovery-compact-field uploads-field">
-                  <span className="field-label">UPLOADS</span>
-                  <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value)}>
-                    <option value="">any</option>
-                    <option value="today">today</option>
-                    <option value="this_week">this week</option>
-                    <option value="this_month">this month</option>
-                    <option value="this_year">this year</option>
-                  </select>
-                </label>
-                <label className="discovery-compact-field min-subs-field">
-                  <span className="field-label">MIN SUBS</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100000000}
-                    value={searchMinSubs}
-                    onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
-                  />
-                </label>
-                <label className="discovery-compact-field resolves-field">
-                  <span className="field-label">RESOLVES</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={25}
-                    value={searchMaxResolves}
-                    onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
-                  />
-                </label>
-              </div>
               <span
-                className="discovery-state-summary"
-                aria-label={`Auto enrich ${autoEnrich ? "on" : "off"}, auto scan ${autoScan ? "on" : "off"}, ${searchCreditCapLabel}`}
+                className="discovery-parameter-summary"
+                aria-label={`Uploads ${uploadedWithinLabel}, minimum subscribers ${searchMinSubs}, resolves ${searchMaxResolves}, deep ${deepSearch ? "on" : "off"}, auto enrich ${autoEnrich ? "on" : "off"}, auto scan ${autoScan ? "on" : "off"}, ${searchCreditCapLabel}`}
               >
-                <span className={autoEnrich ? "state-on" : ""}>ENRICH {autoEnrich ? "ON" : "OFF"}</span>
-                <i aria-hidden="true">{"\u00b7"}</i>
-                <span className={autoScan ? "state-on" : ""}>SCAN {autoScan ? "ON" : "OFF"}</span>
-                <i aria-hidden="true">{"\u00b7"}</i>
-                <span>CAP {searchCreditCap ? `${searchCreditCap} CR` : "NONE"}</span>
+                <span>UPLOADS {uploadedWithinLabel}</span><i aria-hidden="true">·</i>
+                <span>MIN SUBS {searchMinSubs}</span><i aria-hidden="true">·</i>
+                <span>RESOLVES {searchMaxResolves}</span><i aria-hidden="true">·</i>
+                <span>{deepSearch ? "DEEP" : "NO DEEP"}</span><i aria-hidden="true">·</i>
+                <span>{autoEnrich ? "AUTO-ENRICH" : "NO AUTO-ENRICH"}</span><i aria-hidden="true">·</i>
+                <span>{autoScan ? "AUTO-SCAN" : "NO AUTO-SCAN"}</span><i aria-hidden="true">·</i>
+                <span>{searchCreditCap ? `${searchCreditCap} CR CAP` : "NO CAP"}</span>
               </span>
               <span className="discovery-library-count">
                 {suggestions.length + contentSuggestions.length} topics / {searches.length} saved queries
@@ -1067,21 +1065,67 @@ function StageView({
             )}
             {discoveryOpen && (
               <div className="discovery-expanded">
-                <div className="discovery-advanced-row" aria-label="Advanced discovery controls">
-                  <span className="field-label">ADVANCED</span>
-                  <div className="discovery-field toggle-field auto-enrich-field" title="enrich new arrivals on landing">
-                    <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
-                      AUTO-ENRICH
-                    </button>
+                <div className="discovery-parameter-panel" aria-label="Discovery parameters">
+                  <div className="discovery-parameter-head">
+                    <span className="field-label">SEARCH PARAMETERS</span>
+                    <button type="button" className="save-discovery-default" onClick={saveCurrentDiscoveryDefaults}>Save as default</button>
                   </div>
-                  <div className="discovery-field toggle-field auto-scan-field" title="scan new arrivals for SponsorBlock signals">
-                    <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
-                      AUTO-SCAN
-                    </button>
-                  </div>
-                  <div className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
-                    <span className="field-label">CAP</span>
-                    <strong>{searchCreditCapLabel}</strong>
+                  <div className="discovery-parameter-grid">
+                    <label className="discovery-field uploads-field">
+                      <span className="field-label">UPLOADS</span>
+                      <select value={uploadedWithin} onChange={(event) => setUploadedWithin(event.target.value as UploadWindow)}>
+                        <option value="">any upload date</option>
+                        <option value="today">today</option>
+                        <option value="this_week">this week</option>
+                        <option value="this_month">this month</option>
+                        <option value="this_year">this year</option>
+                      </select>
+                    </label>
+                    <label className="discovery-field min-subs-field">
+                      <span className="field-label">MIN SUBS</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100000000}
+                        value={searchMinSubs}
+                        onChange={(event) => setSearchMinSubs(clamp(Number(event.target.value), 0, 100000000))}
+                      />
+                    </label>
+                    <label className="discovery-field resolves-field">
+                      <span className="field-label">RESOLVES</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={25}
+                        value={searchMaxResolves}
+                        onChange={(event) => setSearchMaxResolves(clamp(Number(event.target.value), 1, 25))}
+                      />
+                    </label>
+                    <div className="discovery-field toggle-field deep-field" title="expands search with 4 query variants">
+                      <span className="field-label">DEEP</span>
+                      <button type="button" className={`toggle-chip ${deepSearch ? "active" : ""}`} aria-pressed={deepSearch} onClick={toggleDeepSearch}>
+                        {deepSearch ? "DEEP" : "NO DEEP"}
+                      </button>
+                    </div>
+                    <div className="discovery-field toggle-field auto-enrich-field" title="enrich new arrivals on landing">
+                      <span className="field-label">AUTO-ENRICH</span>
+                      <button type="button" className={`toggle-chip ${autoEnrich ? "active" : ""}`} aria-pressed={autoEnrich} onClick={() => setAutoEnrich((value) => !value)}>
+                        {autoEnrich ? "AUTO-ENRICH" : "NO AUTO-ENRICH"}
+                      </button>
+                    </div>
+                    <div className="discovery-field toggle-field auto-scan-field" title="scan new arrivals for SponsorBlock signals">
+                      <span className="field-label">AUTO-SCAN</span>
+                      <button type="button" className={`toggle-chip ${autoScan ? "active" : ""}`} aria-pressed={autoScan} onClick={() => setAutoScan((value) => !value)}>
+                        {autoScan ? "AUTO-SCAN" : "NO AUTO-SCAN"}
+                      </button>
+                    </div>
+                    <label className="discovery-field cap-field" title={`estimated max ${currentSearchMaxCost} credits`}>
+                      <span className="field-label">CAP</span>
+                      <select value={searchCreditCapMode} onChange={(event) => setSearchCreditCapMode(event.target.value as SearchCreditCapMode)}>
+                        <option value="none">no cap</option>
+                        <option value="40">40 credits</option>
+                      </select>
+                    </label>
                   </div>
                 </div>
                 <div className="discovery-libraries">
@@ -4333,6 +4377,17 @@ function relativeTime(value: string): string {
   if (hours < 48) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
+}
+
+function relativeTimeCompact(value: string): string {
+  const relative = relativeTime(value);
+  if (relative === "just now") return "NOW";
+  return relative.replace(" ago", "").toUpperCase();
+}
+
+function uploadWindowLabel(value: UploadWindow): string {
+  if (!value) return "ANY";
+  return value.replaceAll("_", " ").toUpperCase();
 }
 
 function sortChannels(channels: ChannelCardRow[], sort: SortMode): ChannelCardRow[] {

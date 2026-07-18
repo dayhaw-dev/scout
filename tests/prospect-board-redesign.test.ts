@@ -20,14 +20,17 @@ test("V1 prospect tiles expose four fixed stats and temporal signal colors", () 
   assert.match(styles, /\.footer-dates\.last-upload-stale\s*\{[^}]*#fbbf24/s);
 });
 
-test("discovery console keeps frequent controls visible and expands only query libraries", () => {
+test("discovery console keeps one read-only parameter summary and expands all editing", () => {
   assert.match(app, /discovery-console-folded/);
   assert.doesNotMatch(app, /searchParameterEcho\(/);
   assert.match(app, /aria-expanded=\{discoveryOpen\}/);
-  assert.match(app, /className="discovery-inline-controls" aria-label="Frequent discovery controls"/);
-  assert.match(app, /ENRICH \{autoEnrich \? "ON" : "OFF"\}/);
-  assert.match(app, /SCAN \{autoScan \? "ON" : "OFF"\}/);
-  assert.match(app, /className="discovery-advanced-row" aria-label="Advanced discovery controls"[\s\S]*?AUTO-ENRICH[\s\S]*?AUTO-SCAN[\s\S]*?searchCreditCapLabel/);
+  assert.match(app, /className="discovery-parameter-summary"[\s\S]*?UPLOADS \{uploadedWithinLabel\}[\s\S]*?MIN SUBS \{searchMinSubs\}[\s\S]*?RESOLVES \{searchMaxResolves\}/);
+  assert.match(app, /deepSearch \? "DEEP" : "NO DEEP"/);
+  assert.match(app, /autoEnrich \? "AUTO-ENRICH" : "NO AUTO-ENRICH"/);
+  assert.match(app, /autoScan \? "AUTO-SCAN" : "NO AUTO-SCAN"/);
+  assert.match(app, /className="discovery-parameter-panel" aria-label="Discovery parameters"[\s\S]*?UPLOADS[\s\S]*?MIN SUBS[\s\S]*?RESOLVES[\s\S]*?DEEP[\s\S]*?AUTO-ENRICH[\s\S]*?AUTO-SCAN[\s\S]*?CAP/);
+  assert.match(app, /Save as default/);
+  assert.match(app, /searchCreditCapMode === "40" \? 40 : Number\.POSITIVE_INFINITY/);
   assert.match(app, /<SuggestionRows/);
   assert.match(app, /<SavedSearchesPanel[\s\S]*?searches=\{searches\}[\s\S]*?open=\{openDiscoveryLibrary === "saved"\}/);
   assert.match(app, /label="TOPICS"/);
@@ -38,9 +41,9 @@ test("discovery console keeps frequent controls visible and expands only query l
   assert.match(styles, /\.discovery-summary-row/);
   assert.match(styles, /\.discovery-expanded/);
   assert.match(styles, /\.discovery-chip-viewport,[\s\S]*?max-height: 176px;[\s\S]*?overflow: auto;/);
-  assert.match(styles, /\.discovery-summary-row \{[\s\S]*?grid-template-columns: auto minmax\(260px, 1fr\) auto auto auto auto;[\s\S]*?padding: 6px 8px;/);
-  assert.match(styles, /\.discovery-inline-controls \{[\s\S]*?grid-template-columns: 68px 116px 96px 86px;/);
-  assert.match(styles, /@media \(max-width: 1240px\) \{[\s\S]*?\.discovery-inline-controls \{[\s\S]*?grid-row: 2;/);
+  assert.match(styles, /\.discovery-summary-row \{[\s\S]*?grid-template-columns: auto minmax\(280px, 360px\) minmax\(0, 1fr\) auto auto;[\s\S]*?min-height: 58px;/);
+  assert.match(styles, /\.discovery-parameter-summary \{[\s\S]*?white-space: nowrap;/);
+  assert.match(styles, /\.discovery-parameter-grid \{[\s\S]*?grid-template-columns:/);
 });
 
 test("Pool subheader restores live context, filter count, and quiet system controls", () => {
@@ -56,11 +59,11 @@ test("Pool subheader restores live context, filter count, and quiet system contr
 
 test("deep variants stay with the keyword and discovery libraries share one accordion", () => {
   const keywordIndex = app.indexOf('className="keyword-control"');
-  const controlIndex = app.indexOf('className="discovery-inline-controls"');
+  const summaryIndex = app.indexOf('className="discovery-parameter-summary"');
   const variantIndex = app.indexOf('className="discovery-variant-row"');
   const expandedIndex = app.indexOf('className="discovery-expanded"');
-  assert.ok(keywordIndex >= 0 && keywordIndex < controlIndex, "frequent controls share the collapsed keyword row");
-  assert.ok(controlIndex < variantIndex && variantIndex < expandedIndex, "variants remain between the collapsed row and expandable libraries");
+  assert.ok(keywordIndex >= 0 && keywordIndex < summaryIndex, "the read-only summary follows the keyword in the collapsed row");
+  assert.ok(summaryIndex < variantIndex && variantIndex < expandedIndex, "variants remain between the collapsed row and expandable controls");
   assert.match(app, /discovery-variant-row[\s\S]*?VARIANTS \/[\s\S]*?aria-label=\{`Remove \$\{variant\}`\}/);
   assert.match(styles, /\.discovery-variant-row \{[\s\S]*?grid-template-columns: 96px minmax\(0, 1fr\)/);
   assert.match(styles, /\.discovery-variant-chips \{[\s\S]*?flex-wrap: wrap;/);

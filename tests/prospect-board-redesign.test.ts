@@ -47,6 +47,7 @@ test("discovery console keeps one read-only parameter summary and expands all ed
 });
 
 test("Pool subheader restores live context, filter count, and quiet system controls", () => {
+  assert.match(app, /function Toolbar[\s\S]*?className="toolbar pool-toolbar clipped"/);
   assert.match(app, /className="pool-toolbar-context"[\s\S]*?<strong>POOL<\/strong>[\s\S]*?\{channels\.length\} RESOLVED · SHOWING \{visible\.length\} · SORT \{poolSortLabel\}/);
   assert.match(app, /FILTERS \(\{activeFilterCount\}\)/);
   assert.doesNotMatch(app, /FILTERS \{filtersOpen \? "OPEN" : "CLOSED"\}/);
@@ -54,7 +55,9 @@ test("Pool subheader restores live context, filter count, and quiet system contr
   assert.match(styles, /\.pool-view \{\s*gap: 0;/);
   assert.match(styles, /\.discovery-console-folded \{[\s\S]*?border: 0;[\s\S]*?border-bottom: 1px solid var\(--border-muted\);/);
   assert.match(styles, /\.discovery-summary-row \{[\s\S]*?min-height: 58px;[\s\S]*?padding: 10px 12px;/);
-  assert.match(styles, /\.pool-toolbar \{[\s\S]*?margin-bottom: 16px;[\s\S]*?padding: 5px 10px 7px;[\s\S]*?border: 1px solid #0e2c42;[\s\S]*?border-top: 0;[\s\S]*?background: transparent;/);
+  assert.match(styles, /\.toolbar,[\s\S]*?\.stage-heading,[\s\S]*?background: #0f1b2e;[\s\S]*?border: 1px solid rgba\(34, 211, 238, 0\.18\);[\s\S]*?padding: 12px;/);
+  assert.match(styles, /\.pool-toolbar \{[\s\S]*?margin-bottom: 16px;\s*}/);
+  assert.doesNotMatch(styles, /\.pool-toolbar \{[^}]*?(?:padding|border|background):/);
   assert.match(styles, /\.pool-toolbar > button,[\s\S]*?min-height: 32px;[\s\S]*?border-color: #16435f;/);
   assert.match(styles, /\.pool-toolbar \.density-toggle button\.active \{[\s\S]*?border-bottom: 2px solid #17d9ff;/);
 });

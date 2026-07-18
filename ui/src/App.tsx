@@ -3510,7 +3510,7 @@ function ExpandDialog({
 }
 
 function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="toolbar pool-toolbar">{children}</div>;
+  return <div className="toolbar pool-toolbar clipped">{children}</div>;
 }
 
 function ToggleGroup({

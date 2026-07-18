@@ -2602,10 +2602,6 @@ a:hover {
   gap: 8px;
   min-width: 0;
   margin-bottom: 16px;
-  padding: 5px 10px 7px;
-  border: 1px solid #0e2c42;
-  border-top: 0;
-  background: transparent;
 }
 
 .pool-toolbar-context {

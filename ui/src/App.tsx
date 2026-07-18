@@ -2377,7 +2377,7 @@ function ChannelCard({
     <article className={`channel-card prospect-card ${highlighted ? "new-arrival" : ""} ${stale ? "stale-card" : ""}`}>
       <div className="card-head">
         <ChannelImage
-          src={channel.thumbnail_url}
+          src={null}
           title={channel.title ?? channel.handle ?? channel.channel_id}
           size="large"
         />

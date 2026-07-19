@@ -1949,6 +1949,23 @@ a:hover {
   margin-top: 2px;
 }
 
+.expand-pending,
+.expand-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  background: rgba(11, 29, 48, 0.68);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.expand-error {
+  border-color: rgba(255, 99, 99, 0.42);
+  color: #ff9b9b;
+}
+
 .sponsor-dialog {
   width: min(980px, 100%);
   max-height: min(760px, calc(100vh - 40px));

@@ -199,7 +199,7 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
 test("individual seed expansion reloads its row so freshness updates", () => {
   const app = readFileSync("ui/src/App.tsx", "utf8");
   const individualExpand = app.match(
-    /const result = await api\.expandSeed\(dialogSeed\.channel_id, maxPages, maxResolves\);[\s\S]*?onChanged\(\);/,
+    /const result = await api\.expandSeed\(channelId, maxPages, maxResolves\);[\s\S]*?onChanged\(\);/,
   )?.[0] ?? "";
 
   assert.match(individualExpand, /setSummary\(result\);/);

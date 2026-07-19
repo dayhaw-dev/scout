@@ -1629,6 +1629,8 @@ function SeedsView({
   const [handle, setHandle] = useState("");
   const [loading, setLoading] = useState(false);
   const [dialogSeed, setDialogSeed] = useState<RawChannelRow | null>(null);
+  const [expandingSeedId, setExpandingSeedId] = useState<string | null>(null);
+  const [expandError, setExpandError] = useState<string | null>(null);
   const [summary, setSummary] = useState<SearchSummary | null>(null);
   const [batchSummary, setBatchSummary] = useState<ExpandAllSeedsSummary | null>(null);
   const [searches, setSearches] = useState<SearchRecord[]>([]);
@@ -1636,6 +1638,7 @@ function SeedsView({
   const freshnessRunRef = useRef(0);
   const freshnessQueueRef = useRef<Promise<void>>(Promise.resolve());
   const freshnessHasDispatchedRef = useRef(false);
+  const expandingSeedRef = useRef<string | null>(null);
   const searchedTerms = useMemo(() => searchedTermSet(searches), [searches]);
   const unlockedSeeds = useMemo(() => seeds.filter((seed) => !seed.seed_locked), [seeds]);
   const sortedSeeds = useMemo(() => sortSeeds(seeds, seedSort), [seeds, seedSort]);
@@ -1725,6 +1728,11 @@ function SeedsView({
       onError(error);
       await load();
     }
+  }
+
+  function openExpand(seed: RawChannelRow) {
+    setExpandError(null);
+    setDialogSeed(seed);
   }
 
   async function expandAll() {
@@ -1942,7 +1950,7 @@ function SeedsView({
               <SeedRow
                 key={seed.channel_id}
                 seed={seed}
-                onExpand={() => setDialogSeed(seed)}
+                onExpand={() => openExpand(seed)}
                 onSnapshot={() => void snapshotSeed(seed)}
                 onUnseed={() => void unseed(seed)}
                 onQuery={onQuery}
@@ -1961,7 +1969,7 @@ function SeedsView({
                 <SeedRow
                   key={seed.channel_id}
                   seed={seed}
-                  onExpand={() => setDialogSeed(seed)}
+                  onExpand={() => openExpand(seed)}
                   onSnapshot={() => void snapshotSeed(seed)}
                   onUnseed={() => void unseed(seed)}
                   onQuery={onQuery}
@@ -1977,16 +1985,29 @@ function SeedsView({
       {dialogSeed && (
         <ExpandDialog
           seed={dialogSeed}
-          onClose={() => setDialogSeed(null)}
+          pending={expandingSeedId === dialogSeed.channel_id}
+          error={expandError}
+          onClose={() => {
+            setExpandError(null);
+            setDialogSeed(null);
+          }}
           onRun={async (maxPages, maxResolves) => {
+            if (expandingSeedRef.current) return;
+            const channelId = dialogSeed.channel_id;
+            expandingSeedRef.current = channelId;
+            setExpandingSeedId(channelId);
+            setExpandError(null);
             try {
-              const result = await api.expandSeed(dialogSeed.channel_id, maxPages, maxResolves);
+              const result = await api.expandSeed(channelId, maxPages, maxResolves);
               setSummary(result);
               setDialogSeed(null);
               await load();
               onChanged();
             } catch (error) {
-              onError(error);
+              setExpandError(errorMessage(error));
+            } finally {
+              expandingSeedRef.current = null;
+              setExpandingSeedId(null);
             }
           }}
         />
@@ -3485,10 +3506,14 @@ function Sparkline({ points }: { points: ChannelCardRow["snapshots"] }) {
 
 function ExpandDialog({
   seed,
+  pending,
+  error,
   onClose,
   onRun,
 }: {
   seed: RawChannelRow;
+  pending: boolean;
+  error: string | null;
   onClose: () => void;
   onRun: (maxPages: number, maxResolves: number) => Promise<void>;
 }) {
@@ -3496,14 +3521,23 @@ function ExpandDialog({
   const [maxResolves, setMaxResolves] = useState(15);
   return (
     <div className="dialog-backdrop">
-      <div className="dialog clipped">
+      <div className="dialog clipped" aria-busy={pending}>
         <h2>Expand {seed.title}</h2>
-        <NumberStepper label="pages" value={maxPages} min={1} max={3} onChange={setMaxPages} />
-        <NumberStepper label="resolves" value={maxResolves} min={1} max={25} onChange={setMaxResolves} />
+        <NumberStepper label="pages" value={maxPages} min={1} max={3} onChange={setMaxPages} disabled={pending} />
+        <NumberStepper label="resolves" value={maxResolves} min={1} max={25} onChange={setMaxResolves} disabled={pending} />
         <div className="cost">max {maxPages + maxResolves} credits</div>
+        {pending && (
+          <div className="expand-pending" role="status" aria-live="polite">
+            <Spinner />
+            <span>Fetching videos and resolving up to {maxResolves} channels…</span>
+          </div>
+        )}
+        {error && <div className="expand-error" role="alert">{error}</div>}
         <div className="dialog-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={() => void onRun(maxPages, maxResolves)}>Expand</button>
+          <button onClick={onClose} disabled={pending}>Cancel</button>
+          <button className="primary" disabled={pending} onClick={() => void onRun(maxPages, maxResolves)}>
+            {pending ? "Expanding…" : error ? "Retry" : "Expand"}
+          </button>
         </div>
       </div>
     </div>
@@ -3549,12 +3583,14 @@ function NumberStepper({
   value,
   min,
   max,
+  disabled = false,
   onChange,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
@@ -3564,6 +3600,7 @@ function NumberStepper({
         min={min}
         max={max}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
       />
     </label>

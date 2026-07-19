@@ -43,3 +43,16 @@ test("Seed lock reason is carried from D1 and shown without weakening API fences
   assert.match(app, /disabled=\{seed\.seed_locked\}/);
   assert.match(app, /<button onClick=\{onSnapshot\}>Snapshot<\/button>/);
 });
+
+test("individual Expand exposes guarded pending state and inline retry errors", () => {
+  assert.match(app, /const \[expandingSeedId, setExpandingSeedId\] = useState<string \| null>\(null\)/);
+  assert.match(app, /const expandingSeedRef = useRef<string \| null>\(null\)/);
+  assert.match(app, /if \(expandingSeedRef\.current\) return;/);
+  assert.match(app, /setExpandingSeedId\(channelId\);[\s\S]*?await api\.expandSeed\(channelId, maxPages, maxResolves\)/);
+  assert.match(app, /finally \{[\s\S]*?expandingSeedRef\.current = null;[\s\S]*?setExpandingSeedId\(null\);/);
+  assert.match(app, /Fetching videos and resolving up to \{maxResolves\} channels…/);
+  assert.match(app, /className="expand-error" role="alert"/);
+  assert.match(app, /disabled=\{pending\}/);
+  assert.match(app, /pending \? "Expanding…" : error \? "Retry" : "Expand"/);
+  assert.match(styles, /\.expand-pending,[\s\S]*?\.expand-error/);
+});

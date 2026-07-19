@@ -1983,6 +1983,7 @@ function SeedsView({
               const result = await api.expandSeed(dialogSeed.channel_id, maxPages, maxResolves);
               setSummary(result);
               setDialogSeed(null);
+              await load();
               onChanged();
             } catch (error) {
               onError(error);

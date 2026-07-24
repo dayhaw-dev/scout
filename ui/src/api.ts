@@ -145,6 +145,8 @@ export interface SeedMiningFreshness {
   rss_entry_count: number;
   shorts_count: number;
   pending_classification_count: number;
+  live_count: number;
+  pending_live_classification_count: number;
   fully_mined: boolean;
   status: "ok" | "empty" | "error";
   error: string | null;

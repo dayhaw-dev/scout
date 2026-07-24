@@ -415,6 +415,9 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
         freshness.rss_entry_count AS freshness_rss_entry_count,
         freshness.shorts_count AS freshness_shorts_count,
         freshness.pending_classification_count AS freshness_pending_classification_count,
+        freshness.live_count AS freshness_live_count,
+        freshness.pending_live_classification_count AS freshness_pending_live_classification_count,
+        freshness.live_classification_version AS freshness_live_classification_version,
         freshness.status AS freshness_status,
         freshness.error AS freshness_error,
         freshness.checked_at AS freshness_checked_at
@@ -821,10 +824,14 @@ function seedFreshnessPayload(row: SeedFreshnessCacheRow): SeedFreshnessView {
     rss_entry_count: Number(row.rss_entry_count),
     shorts_count: Number(row.shorts_count),
     pending_classification_count: Number(row.pending_classification_count),
+    live_count: Number(row.live_count),
+    pending_live_classification_count: Number(row.pending_live_classification_count),
     fully_mined: seedFreshnessIsFullyMined(
       row.never_mined === 1,
       row.unmined_count === null ? null : Number(row.unmined_count),
       Number(row.pending_classification_count),
+      Number(row.pending_live_classification_count),
+      Number(row.live_classification_version),
     ),
     status: row.status,
     error: row.error,
@@ -846,9 +853,11 @@ function seedFreshnessView(row: SeedListRow): SeedFreshnessView | null {
     rss_entry_count: Number(row.freshness_rss_entry_count ?? 0),
     shorts_count: Number(row.freshness_shorts_count ?? 0),
     pending_classification_count: Number(row.freshness_pending_classification_count ?? 0),
-    live_count: 0,
-    pending_live_classification_count: 0,
-    live_classification_version: 0,
+    live_count: Number(row.freshness_live_count ?? 0),
+    pending_live_classification_count: Number(
+      row.freshness_pending_live_classification_count ?? 0,
+    ),
+    live_classification_version: Number(row.freshness_live_classification_version ?? 0),
     status: row.freshness_status,
     error: row.freshness_error,
     checked_at: row.freshness_checked_at,
@@ -3624,6 +3633,9 @@ interface SeedListRow extends ChannelRow {
   freshness_rss_entry_count: number | null;
   freshness_shorts_count: number | null;
   freshness_pending_classification_count: number | null;
+  freshness_live_count: number | null;
+  freshness_pending_live_classification_count: number | null;
+  freshness_live_classification_version: number | null;
   freshness_status: SeedFreshnessStatus | null;
   freshness_error: string | null;
   freshness_checked_at: string | null;
@@ -3663,6 +3675,8 @@ interface SeedFreshnessView {
   rss_entry_count: number;
   shorts_count: number;
   pending_classification_count: number;
+  live_count: number;
+  pending_live_classification_count: number;
   fully_mined: boolean;
   status: SeedFreshnessStatus;
   error: string | null;

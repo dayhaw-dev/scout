@@ -552,21 +552,21 @@ export function seedRssSnapshotAggregates(
   entries: PersistedSeedRssEntry[],
   checkedAt: string,
   storedVideos: StoredSeedVideo[] = [],
-  storedVideoCount = storedVideos.length,
 ): SeedRssSnapshotAggregates {
   const currentEntries = entries.filter((entry) => entry.last_seen_at === checkedAt);
   const storedIds = new Set(storedVideos.map((video) => video.video_id));
   return {
     shorts_count: currentEntries.filter((entry) => entry.is_short === 1).length,
     pending_classification_count: currentEntries.filter((entry) => entry.is_short === null).length,
-    live_count: currentEntries.filter((entry) => entry.is_live === 1).length,
-    pending_live_classification_count: storedVideoCount > 0
-      ? currentEntries.filter((entry) => (
-        entry.is_short === 0
-        && entry.is_live === null
-        && !storedIds.has(entry.video_id)
-      )).length
-      : 0,
+    live_count: currentEntries.filter((entry) => (
+      entry.is_live === 1
+      && !storedIds.has(entry.video_id)
+    )).length,
+    pending_live_classification_count: currentEntries.filter((entry) => (
+      entry.is_short === 0
+      && entry.is_live === null
+      && !storedIds.has(entry.video_id)
+    )).length,
   };
 }
 
@@ -588,7 +588,6 @@ export function deriveSeedFreshness(
     currentEntries,
     checkedAt,
     storedVideos,
-    storedVideoCount,
   );
   const newestStoredVideoAt = newestPublishedAt(storedVideos);
   const latestUploadAt = newestPublishedAt(entries);
@@ -611,11 +610,14 @@ export function deriveSeedFreshness(
   }
 
   const storedIds = new Set(storedVideos.map((video) => video.video_id));
-  const longFormEntries = currentEntries.filter((entry) => entry.is_short === 0);
-  const unminedCount = longFormEntries.filter(
+  const fetchableLongFormEntries = currentEntries.filter((entry) => (
+    entry.is_short === 0
+    && entry.is_live === 0
+  ));
+  const unminedCount = fetchableLongFormEntries.filter(
     (entry) => !storedIds.has(entry.video_id),
   ).length;
-  const hasStoredLongFormBoundary = longFormEntries.some(
+  const hasStoredLongFormBoundary = fetchableLongFormEntries.some(
     (entry) => storedIds.has(entry.video_id),
   );
 
@@ -641,10 +643,14 @@ export function seedFreshnessIsFullyMined(
   neverMined: boolean,
   unminedCount: number | null,
   pendingClassificationCount: number,
+  pendingLiveClassificationCount: number,
+  liveClassificationVersion: number,
 ): boolean {
   return !neverMined
+    && liveClassificationVersion === SEED_LIVE_CLASSIFICATION_VERSION
     && unminedCount === 0
-    && pendingClassificationCount === 0;
+    && pendingClassificationCount === 0
+    && pendingLiveClassificationCount === 0;
 }
 
 export function seedFreshnessCacheIsFresh(

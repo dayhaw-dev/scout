@@ -47,6 +47,8 @@ function uiFreshness(overrides: Partial<SeedMiningFreshness> = {}): SeedMiningFr
     rss_entry_count: 15,
     shorts_count: 0,
     pending_classification_count: 0,
+    live_count: 0,
+    pending_live_classification_count: 0,
     fully_mined: true,
     status: "ok",
     error: null,
@@ -128,6 +130,8 @@ test("all-Shorts RSS window reports zero long-form unmined for a mined seed", ()
       result.never_mined,
       result.unmined_count,
       result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
     ),
     true,
   );
@@ -175,6 +179,8 @@ test("pending-only RSS window is zero unmined but never fully mined", () => {
       result.never_mined,
       result.unmined_count,
       result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
     ),
     false,
   );
@@ -204,6 +210,8 @@ test("zero stored videos remains never mined without inventing an unmined count"
       result.never_mined,
       result.unmined_count,
       result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
     ),
     false,
   );
@@ -567,7 +575,6 @@ test("current-snapshot live aggregates count definitive live and only eligible p
       [currentLive, currentPending, storedPending, priorLive],
       CHECKED_AT,
       [{ video_id: "stored-pending", published_at: CHECKED_AT }],
-      30,
     ),
     {
       shorts_count: 0,
@@ -578,7 +585,7 @@ test("current-snapshot live aggregates count definitive live and only eligible p
   );
 });
 
-test("step 2 persists live aggregates and version without changing unmined semantics", () => {
+test("classified live VODs are excluded from fetchable unmined ore", () => {
   const live = classifiedRssEntry("missing-live", 0, 0, undefined, 1);
   const result = deriveSeedFreshness(
     rawRssEntries([live]),
@@ -589,7 +596,7 @@ test("step 2 persists live aggregates and version without changing unmined seman
   );
   const worker = readFileSync("src/index.ts", "utf8");
 
-  assert.equal(result.unmined_count, 1);
+  assert.equal(result.unmined_count, 0);
   assert.equal(result.live_count, 1);
   assert.equal(result.pending_live_classification_count, 0);
   assert.equal(SEED_LIVE_CLASSIFICATION_VERSION, 1);
@@ -598,6 +605,100 @@ test("step 2 persists live aggregates and version without changing unmined seman
   assert.match(
     worker,
     /pending_live_classification_count = excluded\.pending_live_classification_count/,
+  );
+});
+
+test("City Planner-shaped live window is fully mined after six VODs classify", () => {
+  const liveVods = Array.from(
+    { length: 6 },
+    (_, index) => classifiedRssEntry(`live-vod-${index}`, 0, index, undefined, 1),
+  );
+  const result = deriveSeedFreshness(
+    rawRssEntries(liveVods),
+    liveVods,
+    CHECKED_AT,
+    [{ video_id: "stored-long-form", published_at: "2026-07-01T00:00:00Z" }],
+    90,
+  );
+
+  assert.equal(result.unmined_count, 0);
+  assert.equal(result.live_count, 6);
+  assert.equal(result.pending_live_classification_count, 0);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
+    ),
+    true,
+  );
+});
+
+test("version-zero cache rows cannot qualify as fully mined", () => {
+  assert.equal(seedFreshnessIsFullyMined(false, 0, 0, 0, 0), false);
+  assert.equal(
+    seedFreshnessIsFullyMined(false, 0, 0, 0, SEED_LIVE_CLASSIFICATION_VERSION),
+    true,
+  );
+});
+
+test("mixed Shorts, live VODs, and pending classifications stay out of known ore counts", () => {
+  const entries = [
+    classifiedRssEntry("stored-fetchable", 0, 0, undefined, 0),
+    classifiedRssEntry("missing-fetchable", 0, 1, undefined, 0),
+    classifiedRssEntry("missing-live", 0, 2, undefined, 1),
+    pendingLiveEntry("pending-live", 3),
+    classifiedRssEntry("known-short", 1, 4),
+    classifiedRssEntry("pending-short", null, 5),
+  ];
+  const result = deriveSeedFreshness(
+    rawRssEntries(entries),
+    entries,
+    CHECKED_AT,
+    [{ video_id: "stored-fetchable", published_at: entries[0]?.published_at ?? null }],
+    30,
+  );
+
+  assert.equal(result.unmined_count, 1);
+  assert.equal(result.live_count, 1);
+  assert.equal(result.shorts_count, 1);
+  assert.equal(result.pending_classification_count, 1);
+  assert.equal(result.pending_live_classification_count, 1);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
+    ),
+    false,
+  );
+});
+
+test("live-pending entries block MINED even when known fetchable ore is zero", () => {
+  const pending = pendingLiveEntry("pending-live", 0);
+  const result = deriveSeedFreshness(
+    rawRssEntries([pending]),
+    [pending],
+    CHECKED_AT,
+    [{ video_id: "stored-long-form", published_at: "2026-07-01T00:00:00Z" }],
+    30,
+  );
+
+  assert.equal(result.unmined_count, 0);
+  assert.equal(result.pending_live_classification_count, 1);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+      result.pending_live_classification_count,
+      SEED_LIVE_CLASSIFICATION_VERSION,
+    ),
+    false,
   );
 });
 
@@ -781,11 +882,22 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(api, /refreshSeedFreshness\(channelId: string, force = false\)/);
   assert.match(api, /shorts_count: number;/);
   assert.match(api, /pending_classification_count: number;/);
+  assert.match(api, /live_count: number;/);
+  assert.match(api, /pending_live_classification_count: number;/);
   assert.match(api, /fully_mined: boolean;/);
   assert.match(worker, /freshness\.shorts_count AS freshness_shorts_count/);
   assert.match(
     worker,
     /freshness\.pending_classification_count AS freshness_pending_classification_count/,
+  );
+  assert.match(worker, /freshness\.live_count AS freshness_live_count/);
+  assert.match(
+    worker,
+    /freshness\.pending_live_classification_count AS freshness_pending_live_classification_count/,
+  );
+  assert.match(
+    worker,
+    /freshness\.live_classification_version AS freshness_live_classification_version/,
   );
   assert.match(worker, /fully_mined: seedFreshnessIsFullyMined/);
   assert.match(app, /Check freshness/);

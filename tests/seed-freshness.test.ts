@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  classifyPendingSeedRssEntries,
+  classifyYouTubeShort,
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
+  PersistedSeedRssEntry,
+  SEED_RSS_ENTRY_UPSERT_SQL,
+  SEED_SHORTS_CLASSIFICATION_REQUEST_CAP,
   seedFreshnessCacheIsFresh,
   seedFreshnessCacheIsUsable,
+  seedRssSnapshotAggregates,
   YOUTUBE_RSS_ENTRY_LIMIT,
 } from "../src/lib/seed-freshness.js";
 import { RecentVideo } from "../src/lib/sponsor-scan.js";
@@ -103,6 +109,119 @@ test("persistent retryable RSS failures stop after three attempts", async () => 
     /failed with 500/,
   );
   assert.equal(calls, 3);
+});
+
+test("strict Shorts classifier accepts only validated response patterns", async () => {
+  const seenOptions: RequestInit[] = [];
+  const short = await classifyYouTubeShort("short-id", async (_input, options) => {
+    seenOptions.push(options ?? {});
+    return new Response(null, { status: 200 });
+  });
+  const longForm = await classifyYouTubeShort("long-id", async (_input, options) => {
+    seenOptions.push(options ?? {});
+    return new Response(null, {
+      status: 303,
+      headers: { location: "/watch?v=long-id&feature=share" },
+    });
+  });
+  const ambiguous = await classifyYouTubeShort("unknown-id", async (_input, options) => {
+    seenOptions.push(options ?? {});
+    return new Response(null, {
+      status: 302,
+      headers: { location: "/watch?v=some-other-id" },
+    });
+  });
+
+  assert.deepEqual(short, { is_short: 1, error: null });
+  assert.deepEqual(longForm, { is_short: 0, error: null });
+  assert.equal(ambiguous.is_short, null);
+  assert.match(ambiguous.error ?? "", /Ambiguous Shorts response/);
+  assert.deepEqual(
+    seenOptions.map(({ method, redirect }) => ({ method, redirect })),
+    Array.from({ length: 3 }, () => ({ method: "HEAD", redirect: "manual" })),
+  );
+});
+
+test("Shorts classification is capped at 30 requests per invocation", async () => {
+  const checkedAt = "2026-07-23T12:00:00.000Z";
+  const entries = Array.from({ length: 35 }, (_, index): PersistedSeedRssEntry => ({
+    channel_id: "seed",
+    video_id: `video-${index}`,
+    title: `Video ${index}`,
+    published_at: checkedAt,
+    feed_position: index % YOUTUBE_RSS_ENTRY_LIMIT,
+    is_short: null,
+    classification_attempted_at: null,
+    classified_at: null,
+    classification_error: null,
+    first_seen_at: checkedAt,
+    last_seen_at: checkedAt,
+  }));
+  let requests = 0;
+  let pauses = 0;
+  const attempts = await classifyPendingSeedRssEntries(entries, {
+    fetcher: async () => {
+      requests += 1;
+      return new Response(null, { status: 200 });
+    },
+    pause: async () => {
+      pauses += 1;
+    },
+    now: () => checkedAt,
+    limit: 100,
+  });
+
+  assert.equal(SEED_SHORTS_CLASSIFICATION_REQUEST_CAP, 30);
+  assert.equal(attempts.length, 30);
+  assert.equal(requests, 30);
+  assert.equal(pauses, 29);
+  assert.equal(attempts.every((attempt) => attempt.is_short === 1), true);
+});
+
+test("RSS snapshot aggregates exclude rows not seen in the current pass", () => {
+  const checkedAt = "2026-07-23T12:00:00.000Z";
+  const priorCheckedAt = "2026-07-23T06:00:00.000Z";
+  const entry = (
+    videoId: string,
+    isShort: 0 | 1 | null,
+    lastSeenAt = checkedAt,
+  ): PersistedSeedRssEntry => ({
+    channel_id: "seed",
+    video_id: videoId,
+    title: videoId,
+    published_at: checkedAt,
+    feed_position: 0,
+    is_short: isShort,
+    classification_attempted_at: null,
+    classified_at: isShort === null ? null : checkedAt,
+    classification_error: null,
+    first_seen_at: priorCheckedAt,
+    last_seen_at: lastSeenAt,
+  });
+
+  assert.deepEqual(
+    seedRssSnapshotAggregates([
+      entry("current-short", 1),
+      entry("current-long", 0),
+      entry("current-pending", null),
+      entry("prior-short", 1, priorCheckedAt),
+      entry("prior-pending", null, priorCheckedAt),
+    ], checkedAt),
+    { shorts_count: 1, pending_classification_count: 1 },
+  );
+});
+
+test("RSS entry upsert preserves first-seen and all prior classification fields", () => {
+  const updateClause = SEED_RSS_ENTRY_UPSERT_SQL.split("DO UPDATE SET")[1] ?? "";
+
+  assert.match(SEED_RSS_ENTRY_UPSERT_SQL, /first_seen_at/);
+  assert.match(updateClause, /title = excluded\.title/);
+  assert.match(updateClause, /published_at = excluded\.published_at/);
+  assert.match(updateClause, /feed_position = excluded\.feed_position/);
+  assert.match(updateClause, /last_seen_at = excluded\.last_seen_at/);
+  assert.doesNotMatch(updateClause, /first_seen_at/);
+  assert.doesNotMatch(updateClause, /is_short/);
+  assert.doesNotMatch(updateClause, /classification_attempted_at|classified_at|classification_error/);
 });
 
 test("six-hour cache also invalidates immediately when stored coverage changes", () => {

@@ -118,18 +118,23 @@ test("locked seeds can refresh read-only RSS freshness without unlocking", async
   });
   const originalFetch = globalThis.fetch;
   let outboundFetches = 0;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     outboundFetches += 1;
-    assert.match(String(input), /youtube\.com\/feeds\/videos\.xml/);
-    return new Response(`
-      <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
-        <entry>
-          <yt:videoId>new-upload</yt:videoId>
-          <title>New upload</title>
-          <published>2026-07-17T12:00:00Z</published>
-        </entry>
-      </feed>
-    `);
+    if (String(input).includes("/feeds/videos.xml")) {
+      return new Response(`
+        <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+          <entry>
+            <yt:videoId>new-upload</yt:videoId>
+            <title>New upload</title>
+            <published>2026-07-17T12:00:00Z</published>
+          </entry>
+        </feed>
+      `);
+    }
+    assert.match(String(input), /youtube\.com\/shorts\/new-upload/);
+    assert.equal(init?.method, "HEAD");
+    assert.equal(init?.redirect, "manual");
+    return new Response(null, { status: 200 });
   };
 
   try {
@@ -149,8 +154,10 @@ test("locked seeds can refresh read-only RSS freshness without unlocking", async
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(outboundFetches, 1);
+  assert.equal(outboundFetches, 2);
   assert.equal(state.freshnessMutations.length, 1);
+  assert.equal(state.rssRows.length, 1);
+  assert.equal(state.rssRows[0]?.is_short, 1);
   assert.deepEqual(state.seedMutations, []);
 });
 
@@ -296,10 +303,25 @@ interface FakeSeedRow {
   seed_locked: number;
 }
 
+interface FakeRssRow {
+  channel_id: string;
+  video_id: string;
+  title: string | null;
+  published_at: string | null;
+  feed_position: number;
+  is_short: 0 | 1 | null;
+  classification_attempted_at: string | null;
+  classified_at: string | null;
+  classification_error: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
 interface FakeState {
   db: D1Database;
   seedMutations: string[];
   freshnessMutations: string[];
+  rssRows: FakeRssRow[];
   operationTargetReads: number;
 }
 
@@ -314,6 +336,7 @@ function createFakeD1State({
 }): FakeState {
   const seedMutations: string[] = [];
   const freshnessMutations: string[] = [];
+  const rssRows: FakeRssRow[] = [];
   let operationTargetReads = 0;
 
   class FakeStatement {
@@ -344,6 +367,73 @@ function createFakeD1State({
 
     async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
       if (this.query.startsWith("DELETE FROM auth_failures")) return d1Result<T>([]);
+      if (this.query.includes("INSERT INTO seed_rss_entries")) {
+        const [
+          channelId,
+          videoId,
+          title,
+          publishedAt,
+          feedPosition,
+          firstSeenAt,
+          lastSeenAt,
+        ] = this.bindings as [string, string, string | null, string | null, number, string, string];
+        const existing = rssRows.find(
+          (row) => row.channel_id === channelId && row.video_id === videoId,
+        );
+        if (existing) {
+          existing.title = title;
+          existing.published_at = publishedAt;
+          existing.feed_position = feedPosition;
+          existing.last_seen_at = lastSeenAt;
+        } else {
+          rssRows.push({
+            channel_id: channelId,
+            video_id: videoId,
+            title,
+            published_at: publishedAt,
+            feed_position: feedPosition,
+            is_short: null,
+            classification_attempted_at: null,
+            classified_at: null,
+            classification_error: null,
+            first_seen_at: firstSeenAt,
+            last_seen_at: lastSeenAt,
+          });
+        }
+        return d1Result<T>([]);
+      }
+      if (this.query.includes("UPDATE seed_rss_entries")) {
+        const [
+          isShort,
+          attemptedAt,
+          classifiedAt,
+          classificationError,
+          channelId,
+          videoId,
+          lastSeenAt,
+        ] = this.bindings as [
+          0 | 1 | null,
+          string,
+          string | null,
+          string | null,
+          string,
+          string,
+          string,
+        ];
+        const existing = rssRows.find(
+          (row) => row.channel_id === channelId
+            && row.video_id === videoId
+            && row.last_seen_at === lastSeenAt
+            && row.is_short === null,
+        );
+        if (existing) {
+          existing.is_short = isShort;
+          existing.classification_attempted_at = attemptedAt;
+          existing.classified_at = classifiedAt;
+          existing.classification_error = classificationError;
+        }
+        return d1Result<T>([]);
+      }
       if (
         this.query.includes("INSERT INTO seed_mining_freshness")
         || this.query.includes("UPDATE seed_mining_freshness")
@@ -357,6 +447,14 @@ function createFakeD1State({
     }
 
     async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+      if (this.query.includes("FROM seed_rss_entries")) {
+        const [channelId, lastSeenAt] = this.bindings as [string, string];
+        return d1Result(
+          rssRows.filter(
+            (row) => row.channel_id === channelId && row.last_seen_at === lastSeenAt,
+          ) as T[],
+        );
+      }
       if (this.query.includes("SELECT video_id, published_at") && this.query.includes("FROM videos")) {
         return d1Result<T>([]);
       }
@@ -381,8 +479,8 @@ function createFakeD1State({
     prepare(query: string): D1PreparedStatement {
       return new FakeStatement(query) as D1PreparedStatement;
     },
-    async batch<T = unknown>(): Promise<D1Result<T>[]> {
-      throw new Error("Unexpected batch().");
+    async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+      return await Promise.all(statements.map((statement) => statement.run<T>()));
     },
     async exec(): Promise<D1ExecResult> {
       throw new Error("Unexpected exec().");
@@ -399,6 +497,7 @@ function createFakeD1State({
     db,
     seedMutations,
     freshnessMutations,
+    rssRows,
     get operationTargetReads() {
       return operationTargetReads;
     },

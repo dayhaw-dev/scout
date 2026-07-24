@@ -65,9 +65,13 @@ import {
   MIN_SEED_QUERY_VIDEOS,
 } from "./lib/seed-targets";
 import {
+  classifyPendingSeedRssEntries,
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
+  PersistedSeedRssEntry,
+  SEED_RSS_ENTRY_UPSERT_SQL,
   seedFreshnessCacheIsUsable,
+  seedRssSnapshotAggregates,
   StoredSeedVideo,
 } from "./lib/seed-freshness";
 import {
@@ -473,6 +477,90 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
   });
 }
 
+async function currentSeedRssEntries(
+  env: Env,
+  channelId: string,
+  checkedAt: string,
+): Promise<PersistedSeedRssEntry[]> {
+  const rows = await env.SCOUT_DB.prepare(
+    `SELECT
+      channel_id,
+      video_id,
+      title,
+      published_at,
+      feed_position,
+      is_short,
+      classification_attempted_at,
+      classified_at,
+      classification_error,
+      first_seen_at,
+      last_seen_at
+    FROM seed_rss_entries
+    WHERE channel_id = ? AND last_seen_at = ?
+    ORDER BY feed_position ASC`,
+  )
+    .bind(channelId, checkedAt)
+    .all<PersistedSeedRssEntry>();
+  return rows.results;
+}
+
+async function persistAndClassifySeedRssEntries(
+  env: Env,
+  channelId: string,
+  rssEntries: Array<{
+    video_id: string;
+    video_title: string | null;
+    published_at: string | null;
+  }>,
+  checkedAt: string,
+) {
+  if (rssEntries.length > 0) {
+    await env.SCOUT_DB.batch(
+      rssEntries.map((entry, feedPosition) => env.SCOUT_DB.prepare(
+        SEED_RSS_ENTRY_UPSERT_SQL,
+      ).bind(
+        channelId,
+        entry.video_id,
+        entry.video_title,
+        entry.published_at,
+        feedPosition,
+        checkedAt,
+        checkedAt,
+      )),
+    );
+  }
+
+  let currentEntries = await currentSeedRssEntries(env, channelId, checkedAt);
+  const attempts = await classifyPendingSeedRssEntries(currentEntries);
+  if (attempts.length > 0) {
+    await env.SCOUT_DB.batch(
+      attempts.map((attempt) => env.SCOUT_DB.prepare(
+        `UPDATE seed_rss_entries
+        SET
+          is_short = ?,
+          classification_attempted_at = ?,
+          classified_at = ?,
+          classification_error = ?
+        WHERE channel_id = ?
+          AND video_id = ?
+          AND last_seen_at = ?
+          AND is_short IS NULL`,
+      ).bind(
+        attempt.is_short,
+        attempt.attempted_at,
+        attempt.classified_at,
+        attempt.error,
+        attempt.channel_id,
+        attempt.video_id,
+        checkedAt,
+      )),
+    );
+    currentEntries = await currentSeedRssEntries(env, channelId, checkedAt);
+  }
+
+  return seedRssSnapshotAggregates(currentEntries, checkedAt);
+}
+
 async function refreshSeedFreshness(
   channelId: string,
   request: Request,
@@ -532,6 +620,12 @@ async function refreshSeedFreshness(
   let row: SeedFreshnessCacheRow;
   try {
     const rssEntries = await fetchYouTubeRssUploads(channelId);
+    const rssAggregates = await persistAndClassifySeedRssEntries(
+      env,
+      channelId,
+      rssEntries,
+      checkedAt,
+    );
     const derived = deriveSeedFreshness(
       rssEntries,
       stored.results,
@@ -540,6 +634,7 @@ async function refreshSeedFreshness(
     row = {
       channel_id: channelId,
       ...derived,
+      ...rssAggregates,
       unmined_is_lower_bound: derived.unmined_is_lower_bound ? 1 : 0,
       never_mined: derived.never_mined ? 1 : 0,
       status: rssEntries.length === 0 ? "empty" : "ok",
@@ -579,6 +674,8 @@ async function refreshSeedFreshness(
       unmined_is_lower_bound: 0,
       never_mined: stats.stored_video_count === 0 ? 1 : 0,
       rss_entry_count: 0,
+      shorts_count: 0,
+      pending_classification_count: 0,
       status: "error",
       error: failureMessage,
       checked_at: checkedAt,
@@ -600,10 +697,12 @@ async function refreshSeedFreshness(
       unmined_is_lower_bound,
       never_mined,
       rss_entry_count,
+      shorts_count,
+      pending_classification_count,
       status,
       error,
       checked_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(channel_id) DO UPDATE SET
       latest_upload_at = excluded.latest_upload_at,
       newest_stored_video_at = excluded.newest_stored_video_at,
@@ -612,6 +711,8 @@ async function refreshSeedFreshness(
       unmined_is_lower_bound = excluded.unmined_is_lower_bound,
       never_mined = excluded.never_mined,
       rss_entry_count = excluded.rss_entry_count,
+      shorts_count = excluded.shorts_count,
+      pending_classification_count = excluded.pending_classification_count,
       status = excluded.status,
       error = excluded.error,
       checked_at = excluded.checked_at`,
@@ -625,6 +726,8 @@ async function refreshSeedFreshness(
       row.unmined_is_lower_bound,
       row.never_mined,
       row.rss_entry_count,
+      row.shorts_count,
+      row.pending_classification_count,
       row.status,
       row.error,
       row.checked_at,
@@ -680,6 +783,8 @@ function seedFreshnessView(row: SeedListRow): SeedFreshnessView | null {
     unmined_is_lower_bound: Number(row.freshness_unmined_is_lower_bound ?? 0),
     never_mined: Number(row.freshness_never_mined ?? 0),
     rss_entry_count: Number(row.freshness_rss_entry_count ?? 0),
+    shorts_count: 0,
+    pending_classification_count: 0,
     status: row.freshness_status,
     error: row.freshness_error,
     checked_at: row.freshness_checked_at,
@@ -3472,6 +3577,8 @@ interface SeedFreshnessCacheRow {
   unmined_is_lower_bound: number;
   never_mined: number;
   rss_entry_count: number;
+  shorts_count: number;
+  pending_classification_count: number;
   status: SeedFreshnessStatus;
   error: string | null;
   checked_at: string;

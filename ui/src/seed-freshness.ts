@@ -2,6 +2,7 @@ import type { SeedMiningFreshness } from "./api";
 
 export const SEED_FRESHNESS_PACING_MIN_MS = 700;
 export const SEED_FRESHNESS_PACING_MAX_MS = 1_100;
+export const SEED_LIVE_GARDEN_COOLDOWN_MS = 2_000;
 export const SEED_RSS_WINDOW_TOOLTIP =
   "UNMINED counts only fetchable, non-live long-form uploads within YouTube's latest 15 RSS entries. Shorts and archived live VODs are not mined and consume RSS window slots, so older fetchable uploads may sit outside visibility.";
 
@@ -41,6 +42,12 @@ export function seedFreshnessSecondaryNote(
   if (pendingLive > 0) noteParts.push(`${pendingLive} LIVE PENDING CLASSIFICATION`);
 
   return noteParts.length > 0 ? noteParts.join(" · ") : null;
+}
+
+export function seedLiveGardenCooldownMs(freshness: SeedMiningFreshness): number {
+  return (freshness.live_classification_requests ?? 0) > 0
+    ? SEED_LIVE_GARDEN_COOLDOWN_MS
+    : 0;
 }
 
 export function seedOrePresentation(

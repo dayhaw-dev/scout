@@ -62,7 +62,10 @@ test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status 
   assert.match(source, /latest_outreach_note/);
   assert.match(source, /Promote to seed/);
   assert.match(seedFreshness, /STALE/);
-  assert.match(source, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(
+    source,
+    /import \{[\s\S]*?seedFreshnessPacingMs,[\s\S]*?seedLiveGardenCooldownMs,[\s\S]*?seedOrePresentation,[\s\S]*?\} from "\.\/seed-freshness"/,
+  );
   assert.match(source, /seedOrePresentation\(freshness\)/);
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
   assert.doesNotMatch(source, /daysFromNowInput/);

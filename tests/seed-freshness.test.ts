@@ -13,6 +13,7 @@ import {
   SEED_LIVE_CLASSIFICATION_DELAY_MS,
   SEED_LIVE_CLASSIFICATION_MAX_BYTES,
   SEED_LIVE_CLASSIFICATION_REQUEST_CAP,
+  SEED_LIVE_CLASSIFICATION_RETRY_AFTER_MAX_MS,
   SEED_LIVE_CLASSIFICATION_TIMEOUT_MS,
   SEED_LIVE_CLASSIFICATION_VERSION,
   SEED_RSS_ENTRY_UPSERT_SQL,
@@ -27,8 +28,10 @@ import { RecentVideo } from "../src/lib/sponsor-scan.js";
 import {
   SEED_FRESHNESS_PACING_MAX_MS,
   SEED_FRESHNESS_PACING_MIN_MS,
+  SEED_LIVE_GARDEN_COOLDOWN_MS,
   SEED_RSS_WINDOW_TOOLTIP,
   seedFreshnessPacingMs,
+  seedLiveGardenCooldownMs,
   seedFreshnessSecondaryNote,
   seedOrePresentation,
 } from "../ui/src/seed-freshness.js";
@@ -500,7 +503,7 @@ test("live GET eligibility excludes Shorts, stored IDs, known live state, and ne
     { video_id: "stored-boundary", published_at: CHECKED_AT },
   ];
   const requested: string[] = [];
-  const attempts = await classifyPendingSeedLiveEntries(entries, stored, stored.length, {
+  const batch = await classifyPendingSeedLiveEntries(entries, stored, stored.length, {
     fetcher: async (input) => {
       const videoId = new URL(String(input)).searchParams.get("v") ?? "";
       requested.push(videoId);
@@ -516,9 +519,16 @@ test("live GET eligibility excludes Shorts, stored IDs, known live state, and ne
   });
 
   assert.deepEqual(requested, ["eligible-long"]);
-  assert.equal(attempts.length, 1);
-  assert.equal(attempts[0]?.is_live, 0);
-  assert.deepEqual(neverMined, []);
+  assert.equal(batch.attempts.length, 1);
+  assert.equal(batch.attempts[0]?.is_live, 0);
+  assert.equal(batch.requests_issued, 1);
+  assert.deepEqual(neverMined, {
+    attempts: [],
+    requests_issued: 0,
+    rate_limited: false,
+    untouched_count: 0,
+    note: null,
+  });
 });
 
 test("live GETs are capped at six and also respect the shared 30-attempt ceiling", async () => {
@@ -550,16 +560,74 @@ test("live GETs are capped at six and also respect the shared 30-attempt ceiling
   assert.equal(SEED_CLASSIFICATION_REQUEST_CAP, 30);
   assert.equal(SEED_LIVE_CLASSIFICATION_REQUEST_CAP, 6);
   assert.equal(SEED_LIVE_CLASSIFICATION_DELAY_MS, 350);
-  assert.equal(liveCap.length, 6);
+  assert.equal(liveCap.attempts.length, 6);
   assert.equal(requests, 6);
   assert.equal(pauses, 5);
 
   requests = 0;
   pauses = 0;
   const sharedCap = await classify(28);
-  assert.equal(sharedCap.length, 2);
+  assert.equal(sharedCap.attempts.length, 2);
   assert.equal(requests, 2);
   assert.equal(pauses, 1);
+});
+
+test("first live-classification 429 trips a circuit breaker and leaves later entries untouched", async () => {
+  const entries = Array.from({ length: 3 }, (_, index) => pendingLiveEntry(`rate-${index}`, index));
+  const batch = await classifyPendingSeedLiveEntries(
+    entries,
+    [{ video_id: "stored-boundary", published_at: CHECKED_AT }],
+    1,
+    {
+      fetcher: async () => new Response("rate limited", { status: 429 }),
+      pause: async () => {
+        throw new Error("a 429 without a usable Retry-After must not pause or continue");
+      },
+      now: () => CHECKED_AT,
+    },
+  );
+
+  assert.equal(batch.requests_issued, 1);
+  assert.equal(batch.rate_limited, true);
+  assert.equal(batch.untouched_count, 2);
+  assert.equal(batch.attempts.length, 1);
+  assert.equal(batch.attempts[0]?.video_id, "rate-0");
+  assert.equal(batch.attempts[0]?.error, "Live classification request failed with 429.");
+  assert.match(batch.note ?? "", /3 pending uploads deferred \(2 not attempted\)/);
+  assert.equal(batch.attempts.some((attempt) => attempt.video_id === "rate-1"), false);
+  assert.equal(batch.attempts.some((attempt) => attempt.video_id === "rate-2"), false);
+});
+
+test("live-classification honors bounded Retry-After once and clears a stale 429 on success", async () => {
+  const entry = pendingLiveEntry("retry-live", 0);
+  entry.live_classification_error = "Live classification request failed with 429.";
+  let requests = 0;
+  const pauses: number[] = [];
+  const batch = await classifyPendingSeedLiveEntries(
+    [entry],
+    [{ video_id: "stored-boundary", published_at: CHECKED_AT }],
+    1,
+    {
+      fetcher: async () => {
+        requests += 1;
+        return requests === 1
+          ? new Response("rate limited", { status: 429, headers: { "Retry-After": "1" } })
+          : new Response(watchPage("retry-live", false));
+      },
+      pause: async (ms) => { pauses.push(ms); },
+      now: () => CHECKED_AT,
+    },
+  );
+
+  assert.equal(SEED_LIVE_CLASSIFICATION_RETRY_AFTER_MAX_MS, 10_000);
+  assert.deepEqual(pauses, [1_000]);
+  assert.equal(batch.requests_issued, 2);
+  assert.equal(batch.rate_limited, false);
+  assert.equal(batch.untouched_count, 0);
+  assert.equal(batch.note, null);
+  assert.equal(batch.attempts.length, 1);
+  assert.equal(batch.attempts[0]?.is_live, 0);
+  assert.equal(batch.attempts[0]?.error, null);
 });
 
 test("current-snapshot live aggregates count definitive live and only eligible pending rows", () => {
@@ -818,6 +886,13 @@ test("seed freshness client pacing adds bounded jitter between sequential reques
   assert.ok(seedFreshnessPacingMs(0.5) < SEED_FRESHNESS_PACING_MAX_MS);
 });
 
+test("garden freshness adds a two-second cooldown only after a seed issued live GETs", () => {
+  assert.equal(SEED_LIVE_GARDEN_COOLDOWN_MS, 2_000);
+  assert.equal(seedLiveGardenCooldownMs(uiFreshness()), 0);
+  assert.equal(seedLiveGardenCooldownMs(uiFreshness({ live_classification_requests: 1 })), 2_000);
+  assert.equal(seedLiveGardenCooldownMs(uiFreshness({ live_classification_requests: 2 })), 2_000);
+});
+
 test("seed ore UI distinguishes mined, pending, lower-bound, Shorts, and live states honestly", () => {
   const simone = seedOrePresentation(uiFreshness({ shorts_count: 15 }));
   assert.equal(simone.value, "0");
@@ -915,6 +990,8 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(api, /live_count: number;/);
   assert.match(api, /pending_live_classification_count: number;/);
   assert.match(api, /fully_mined: boolean;/);
+  assert.match(api, /live_classification_requests\?: number;/);
+  assert.match(api, /live_classification_rate_limited\?: boolean;/);
   assert.match(worker, /freshness\.shorts_count AS freshness_shorts_count/);
   assert.match(
     worker,
@@ -933,11 +1010,14 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(app, /Check freshness/);
   assert.match(app, /15\+|unmined_is_lower_bound/);
   assert.doesNotMatch(app, /Includes Shorts|upload ore, not a channel count/);
-  assert.match(app, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(app, /seedLiveGardenCooldownMs/);
   assert.match(app, /seedOrePresentation\(freshness\)/);
   assert.match(app, /Unmined desc/);
   assert.match(seedFreshnessUi, /NEVER MINED/);
   assert.match(app, /seedFreshnessPacingMs/);
+  assert.match(app, /await pause\(liveCooldownMs\)/);
+  assert.match(worker, /live_classification_rate_limited: liveClassification\.rate_limited/);
+  assert.match(worker, /live_classification_note: liveClassification\.note/);
   assert.match(app, /freshnessQueueRef/);
   assert.match(app, /freshness\.error/);
   assert.match(seedFreshnessUi, /· STALE/);

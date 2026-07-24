@@ -15,6 +15,7 @@ export const SEED_LIVE_CLASSIFICATION_REQUEST_CAP = 6;
 export const SEED_LIVE_CLASSIFICATION_DELAY_MS = 350;
 export const SEED_LIVE_CLASSIFICATION_TIMEOUT_MS = 8_000;
 export const SEED_LIVE_CLASSIFICATION_MAX_BYTES = 1024 * 1024;
+export const SEED_LIVE_CLASSIFICATION_RETRY_AFTER_MAX_MS = 10_000;
 export const SEED_LIVE_CLASSIFICATION_VERSION = 1;
 
 export const SEED_RSS_ENTRY_UPSERT_SQL = `
@@ -72,6 +73,8 @@ export interface SeedShortsClassificationAttempt extends SeedShortsClassificatio
 export interface SeedLiveClassification {
   is_live: 0 | 1 | null;
   error: string | null;
+  rate_limited?: boolean;
+  retry_after_ms?: number | null;
 }
 
 export interface SeedLiveClassificationAttempt extends SeedLiveClassification {
@@ -79,6 +82,14 @@ export interface SeedLiveClassificationAttempt extends SeedLiveClassification {
   video_id: string;
   attempted_at: string;
   classified_at: string | null;
+}
+
+export interface SeedLiveClassificationBatch {
+  attempts: SeedLiveClassificationAttempt[];
+  requests_issued: number;
+  rate_limited: boolean;
+  untouched_count: number;
+  note: string | null;
 }
 
 export interface SeedRssSnapshotAggregates {
@@ -397,6 +408,19 @@ async function readBoundedVideoDetailsJson(
   }
 }
 
+function retryAfterMs(value: string | null, nowMs = Date.now()): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const delayMs = Number(trimmed) * 1000;
+    return delayMs <= SEED_LIVE_CLASSIFICATION_RETRY_AFTER_MAX_MS ? delayMs : null;
+  }
+  const retryAt = Date.parse(trimmed);
+  if (!Number.isFinite(retryAt)) return null;
+  const delayMs = Math.max(0, retryAt - nowMs);
+  return delayMs <= SEED_LIVE_CLASSIFICATION_RETRY_AFTER_MAX_MS ? delayMs : null;
+}
+
 export async function classifyYouTubeLiveVod(
   videoId: string,
   fetcher: typeof fetch = fetch,
@@ -418,6 +442,14 @@ export async function classifyYouTubeLiveVod(
     });
     if (!response.ok) {
       await cancelResponseBody(response);
+      if (response.status === 429) {
+        return {
+          is_live: null,
+          error: "Live classification request failed with 429.",
+          rate_limited: true,
+          retry_after_ms: retryAfterMs(response.headers.get("retry-after")),
+        };
+      }
       return {
         is_live: null,
         error: `Live classification request failed with ${response.status}.`,
@@ -505,8 +537,15 @@ export async function classifyPendingSeedLiveEntries(
     limit?: number;
     classificationAttemptsUsed?: number;
   } = {},
-): Promise<SeedLiveClassificationAttempt[]> {
-  if (storedVideoCount <= 0) return [];
+): Promise<SeedLiveClassificationBatch> {
+  const emptyBatch = (): SeedLiveClassificationBatch => ({
+    attempts: [],
+    requests_issued: 0,
+    rate_limited: false,
+    untouched_count: 0,
+    note: null,
+  });
+  if (storedVideoCount <= 0) return emptyBatch();
 
   const fetcher = options.fetcher ?? fetch;
   const pause = options.pause ?? delay;
@@ -528,11 +567,21 @@ export async function classifyPendingSeedLiveEntries(
     ))
     .slice(0, limit);
   const attempts: SeedLiveClassificationAttempt[] = [];
+  let requestsIssued = 0;
+  let rateLimited = false;
+  let untouchedCount = 0;
+  let note: string | null = null;
 
   for (let index = 0; index < pending.length; index += 1) {
     const entry = pending[index];
+    let classification = await classifyYouTubeLiveVod(entry.video_id, fetcher);
+    requestsIssued += 1;
+    if (classification.rate_limited && typeof classification.retry_after_ms === "number") {
+      await pause(classification.retry_after_ms);
+      classification = await classifyYouTubeLiveVod(entry.video_id, fetcher);
+      requestsIssued += 1;
+    }
     const attemptedAt = now();
-    const classification = await classifyYouTubeLiveVod(entry.video_id, fetcher);
     attempts.push({
       channel_id: entry.channel_id,
       video_id: entry.video_id,
@@ -540,12 +589,25 @@ export async function classifyPendingSeedLiveEntries(
       classified_at: classification.is_live === null ? null : attemptedAt,
       ...classification,
     });
+    if (classification.rate_limited) {
+      rateLimited = true;
+      untouchedCount = pending.length - index - 1;
+      const pendingCount = untouchedCount + 1;
+      note = `YouTube rate-limited live classification; ${pendingCount} pending upload${pendingCount === 1 ? "" : "s"} deferred (${untouchedCount} not attempted).`;
+      break;
+    }
     if (index < pending.length - 1) {
       await pause(SEED_LIVE_CLASSIFICATION_DELAY_MS);
     }
   }
 
-  return attempts;
+  return {
+    attempts,
+    requests_issued: requestsIssued,
+    rate_limited: rateLimited,
+    untouched_count: untouchedCount,
+    note,
+  };
 }
 
 export function seedRssSnapshotAggregates(

@@ -44,7 +44,10 @@ test("Seed garden exposes the requested stats, columns, prices, and mined-out sp
   assert.match(seedFreshness, /`\+\$\{live\} LIVE`/);
   assert.match(seedFreshness, /`\$\{pendingLive\} LIVE PENDING CLASSIFICATION`/);
   assert.match(seedFreshness, /noteParts\.join\(" · "\)/);
-  assert.match(app, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(
+    app,
+    /import \{[\s\S]*?seedFreshnessPacingMs,[\s\S]*?seedLiveGardenCooldownMs,[\s\S]*?seedOrePresentation,[\s\S]*?\} from "\.\/seed-freshness"/,
+  );
   assert.match(app, /seedOrePresentation\(freshness\)/);
 });
 

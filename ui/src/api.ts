@@ -148,6 +148,10 @@ export interface SeedMiningFreshness {
   live_count: number;
   pending_live_classification_count: number;
   fully_mined: boolean;
+  live_classification_requests?: number;
+  live_classification_rate_limited?: boolean;
+  live_classification_untouched_count?: number;
+  live_classification_note?: string | null;
   status: "ok" | "empty" | "error";
   error: string | null;
   checked_at: string;

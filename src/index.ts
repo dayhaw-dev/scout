@@ -70,6 +70,7 @@ import {
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
   PersistedSeedRssEntry,
+  SeedLiveClassificationBatch,
   SEED_LIVE_CLASSIFICATION_VERSION,
   SEED_RSS_ENTRY_UPSERT_SQL,
   seedFreshnessCacheIsUsable,
@@ -571,15 +572,15 @@ async function persistAndClassifySeedRssEntries(
     currentEntries = await currentSeedRssEntries(env, channelId, checkedAt);
   }
 
-  const liveAttempts = await classifyPendingSeedLiveEntries(
+  const liveClassification = await classifyPendingSeedLiveEntries(
     currentEntries,
     storedVideos,
     storedVideoCount,
     { classificationAttemptsUsed: attempts.length },
   );
-  if (liveAttempts.length > 0) {
+  if (liveClassification.attempts.length > 0) {
     await env.SCOUT_DB.batch(
-      liveAttempts.map((attempt) => env.SCOUT_DB.prepare(
+      liveClassification.attempts.map((attempt) => env.SCOUT_DB.prepare(
         `UPDATE seed_rss_entries
         SET
           is_live = ?,
@@ -604,7 +605,7 @@ async function persistAndClassifySeedRssEntries(
     currentEntries = await currentSeedRssEntries(env, channelId, checkedAt);
   }
 
-  return currentEntries;
+  return { entries: currentEntries, liveClassification };
 }
 
 async function refreshSeedFreshness(
@@ -659,9 +660,16 @@ async function refreshSeedFreshness(
 
   const checkedAt = new Date().toISOString();
   let row: SeedFreshnessCacheRow;
+  let liveClassification: SeedLiveClassificationBatch = {
+    attempts: [],
+    requests_issued: 0,
+    rate_limited: false,
+    untouched_count: 0,
+    note: null,
+  };
   try {
     const rssEntries = await fetchYouTubeRssUploads(channelId);
-    const classifiedEntries = await persistAndClassifySeedRssEntries(
+    const classified = await persistAndClassifySeedRssEntries(
       env,
       channelId,
       rssEntries,
@@ -669,9 +677,10 @@ async function refreshSeedFreshness(
       stored.results,
       stats.stored_video_count,
     );
+    liveClassification = classified.liveClassification;
     const derived = deriveSeedFreshness(
       rssEntries,
-      classifiedEntries,
+      classified.entries,
       checkedAt,
       stored.results,
       stats.stored_video_count,
@@ -791,7 +800,14 @@ async function refreshSeedFreshness(
     )
     .run();
 
-  return json({ ...seedFreshnessPayload(row), cached: false });
+  return json({
+    ...seedFreshnessPayload(row),
+    cached: false,
+    live_classification_requests: liveClassification.requests_issued,
+    live_classification_rate_limited: liveClassification.rate_limited,
+    live_classification_untouched_count: liveClassification.untouched_count,
+    live_classification_note: liveClassification.note,
+  });
 }
 
 async function seedStoredVideoStats(

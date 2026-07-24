@@ -25,7 +25,11 @@ import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, REACH_CONFIG } from "./config";
 import { loadDiscoveryDefaults, saveDiscoveryDefaults } from "./discovery-defaults";
 import type { DiscoveryDefaults, SearchCreditCapMode, UploadWindow } from "./discovery-defaults";
-import { seedFreshnessPacingMs, seedOrePresentation } from "./seed-freshness";
+import {
+  seedFreshnessPacingMs,
+  seedLiveGardenCooldownMs,
+  seedOrePresentation,
+} from "./seed-freshness";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
@@ -1831,9 +1835,13 @@ function SeedsView({
           value: seed,
         })),
         controller,
-        runItem: async (seed: RawChannelRow) => {
+        runItem: async (seed: RawChannelRow, index: number) => {
           const freshness = await requestSeedFreshness(seed.channel_id, true);
           applyFreshness(seed.channel_id, freshness);
+          const liveCooldownMs = seedLiveGardenCooldownMs(freshness);
+          if (liveCooldownMs > 0 && index < seeds.length - 1) {
+            await pause(liveCooldownMs);
+          }
           if (freshness.error) {
             throw new Error(freshness.error ?? "YouTube RSS freshness check failed.");
           }

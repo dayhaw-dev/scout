@@ -72,6 +72,8 @@ export interface DerivedSeedFreshness {
   unmined_is_lower_bound: boolean;
   never_mined: boolean;
   rss_entry_count: number;
+  shorts_count: number;
+  pending_classification_count: number;
 }
 
 export class YouTubeRssError extends Error {
@@ -234,10 +236,17 @@ export function seedRssSnapshotAggregates(
 
 export function deriveSeedFreshness(
   rssEntries: RecentVideo[],
+  classifiedEntries: PersistedSeedRssEntry[],
+  checkedAt: string,
   storedVideos: StoredSeedVideo[],
   storedVideoCount = storedVideos.length,
 ): DerivedSeedFreshness {
   const entries = rssEntries.slice(0, YOUTUBE_RSS_ENTRY_LIMIT);
+  const currentEntries = classifiedEntries.filter((entry) => entry.last_seen_at === checkedAt);
+  const { shorts_count, pending_classification_count } = seedRssSnapshotAggregates(
+    currentEntries,
+    checkedAt,
+  );
   const newestStoredVideoAt = newestPublishedAt(storedVideos);
   const latestUploadAt = newestPublishedAt(entries);
   const neverMined = storedVideoCount === 0;
@@ -251,21 +260,19 @@ export function deriveSeedFreshness(
       unmined_is_lower_bound: false,
       never_mined: true,
       rss_entry_count: entries.length,
+      shorts_count,
+      pending_classification_count,
     };
   }
 
   const storedIds = new Set(storedVideos.map((video) => video.video_id));
-  const firstStoredEntry = entries.findIndex((entry) => storedIds.has(entry.video_id));
-  let unminedCount: number;
-
-  if (firstStoredEntry >= 0) {
-    unminedCount = firstStoredEntry;
-  } else {
-    const newestStoredTime = publishedTime(newestStoredVideoAt);
-    unminedCount = Number.isFinite(newestStoredTime)
-      ? entries.filter((entry) => publishedTime(entry.published_at) > newestStoredTime).length
-      : entries.length;
-  }
+  const longFormEntries = currentEntries.filter((entry) => entry.is_short === 0);
+  const unminedCount = longFormEntries.filter(
+    (entry) => !storedIds.has(entry.video_id),
+  ).length;
+  const hasStoredLongFormBoundary = longFormEntries.some(
+    (entry) => storedIds.has(entry.video_id),
+  );
 
   return {
     latest_upload_at: latestUploadAt,
@@ -273,10 +280,24 @@ export function deriveSeedFreshness(
     stored_video_count: storedVideoCount,
     unmined_count: unminedCount,
     unmined_is_lower_bound:
-      entries.length >= YOUTUBE_RSS_ENTRY_LIMIT && unminedCount === entries.length,
+      entries.length >= YOUTUBE_RSS_ENTRY_LIMIT
+      && unminedCount > 0
+      && !hasStoredLongFormBoundary,
     never_mined: false,
     rss_entry_count: entries.length,
+    shorts_count,
+    pending_classification_count,
   };
+}
+
+export function seedFreshnessIsFullyMined(
+  neverMined: boolean,
+  unminedCount: number | null,
+  pendingClassificationCount: number,
+): boolean {
+  return !neverMined
+    && unminedCount === 0
+    && pendingClassificationCount === 0;
 }
 
 export function seedFreshnessCacheIsFresh(

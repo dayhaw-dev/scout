@@ -11,6 +11,7 @@ import {
   SEED_SHORTS_CLASSIFICATION_REQUEST_CAP,
   seedFreshnessCacheIsFresh,
   seedFreshnessCacheIsUsable,
+  seedFreshnessIsFullyMined,
   seedRssSnapshotAggregates,
   YOUTUBE_RSS_ENTRY_LIMIT,
 } from "../src/lib/seed-freshness.js";
@@ -21,53 +22,183 @@ import {
   seedFreshnessPacingMs,
 } from "../ui/src/seed-freshness.js";
 
-test("freshness counts feed entries before the newest stored video, including Shorts", () => {
-  const rss: RecentVideo[] = [
-    { video_id: "short-new", video_title: "A new Short", published_at: "2026-07-17T10:00:00Z" },
-    { video_id: "video-new", video_title: "A new video", published_at: "2026-07-16T10:00:00Z" },
-    { video_id: "stored", video_title: "Already stored", published_at: "2026-07-15T10:00:00Z" },
-    { video_id: "older-gap", video_title: "Older missing upload", published_at: "2026-07-14T10:00:00Z" },
-  ];
+const CHECKED_AT = "2026-07-23T12:00:00.000Z";
 
+function classifiedRssEntry(
+  videoId: string,
+  isShort: 0 | 1 | null,
+  feedPosition: number,
+  publishedAt = new Date(Date.UTC(2026, 6, 23, 12 - feedPosition)).toISOString(),
+): PersistedSeedRssEntry {
+  return {
+    channel_id: "seed",
+    video_id: videoId,
+    title: videoId,
+    published_at: publishedAt,
+    feed_position: feedPosition,
+    is_short: isShort,
+    classification_attempted_at: CHECKED_AT,
+    classified_at: isShort === null ? null : CHECKED_AT,
+    classification_error: isShort === null ? "pending" : null,
+    first_seen_at: CHECKED_AT,
+    last_seen_at: CHECKED_AT,
+  };
+}
+
+function rawRssEntries(entries: PersistedSeedRssEntry[]): RecentVideo[] {
+  return entries.map((entry) => ({
+    video_id: entry.video_id,
+    video_title: entry.title,
+    published_at: entry.published_at,
+  }));
+}
+
+test("all-Shorts RSS window reports zero long-form unmined for a mined seed", () => {
+  const classified = Array.from(
+    { length: YOUTUBE_RSS_ENTRY_LIMIT },
+    (_, index) => classifiedRssEntry(`short-${index}`, 1, index),
+  );
   const result = deriveSeedFreshness(
-    rss,
-    [{ video_id: "stored", published_at: "2026-07-15T12:00:00Z" }],
+    rawRssEntries(classified),
+    classified,
+    CHECKED_AT,
+    [{ video_id: "stored-long-form", published_at: "2026-07-01T00:00:00Z" }],
     30,
   );
 
-  assert.equal(result.latest_upload_at, "2026-07-17T10:00:00Z");
-  assert.equal(result.unmined_count, 2);
+  assert.equal(result.latest_upload_at, classified[0]?.published_at);
+  assert.equal(result.unmined_count, 0);
+  assert.equal(result.shorts_count, 15);
+  assert.equal(result.pending_classification_count, 0);
   assert.equal(result.unmined_is_lower_bound, false);
-  assert.equal(result.never_mined, false);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+    ),
+    true,
+  );
 });
 
-test("freshness reports 15+ when the full RSS window is newer than stored coverage", () => {
-  const rss = Array.from({ length: YOUTUBE_RSS_ENTRY_LIMIT }, (_, index) => ({
-    video_id: `new-${index}`,
-    video_title: `New ${index}`,
-    published_at: new Date(Date.UTC(2026, 6, 17 - index)).toISOString(),
-  }));
-
+test("mixed RSS window counts only unstored classified long-form entries", () => {
+  const classified = [
+    classifiedRssEntry("stored-long-form", 0, 0),
+    classifiedRssEntry("short-new", 1, 1),
+    classifiedRssEntry("long-form-new", 0, 2),
+    classifiedRssEntry("pending-new", null, 3),
+  ];
   const result = deriveSeedFreshness(
-    rss,
-    [{ video_id: "old", published_at: "2025-01-01T00:00:00Z" }],
-    90,
+    rawRssEntries(classified),
+    classified,
+    CHECKED_AT,
+    [{ video_id: "stored-long-form", published_at: classified[0]?.published_at ?? null }],
+    30,
   );
 
-  assert.equal(result.unmined_count, 15);
-  assert.equal(result.unmined_is_lower_bound, true);
+  assert.equal(result.unmined_count, 1);
+  assert.equal(result.shorts_count, 1);
+  assert.equal(result.pending_classification_count, 1);
+  assert.equal(result.unmined_is_lower_bound, false);
 });
 
-test("zero stored videos is never mined rather than an invented unmined count", () => {
+test("pending-only RSS window is zero unmined but never fully mined", () => {
+  const classified = [
+    classifiedRssEntry("pending-one", null, 0),
+    classifiedRssEntry("pending-two", null, 1),
+  ];
   const result = deriveSeedFreshness(
-    [{ video_id: "latest", video_title: "Latest", published_at: "2026-07-17T10:00:00Z" }],
+    rawRssEntries(classified),
+    classified,
+    CHECKED_AT,
+    [{ video_id: "stored-long-form", published_at: "2026-07-01T00:00:00Z" }],
+    30,
+  );
+
+  assert.equal(result.unmined_count, 0);
+  assert.equal(result.shorts_count, 0);
+  assert.equal(result.pending_classification_count, 2);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+    ),
+    false,
+  );
+});
+
+test("zero stored videos remains never mined without inventing an unmined count", () => {
+  const classified = [
+    classifiedRssEntry("latest-short", 1, 0),
+    classifiedRssEntry("latest-long-form", 0, 1),
+    classifiedRssEntry("latest-pending", null, 2),
+  ];
+  const result = deriveSeedFreshness(
+    rawRssEntries(classified),
+    classified,
+    CHECKED_AT,
     [],
     0,
   );
 
   assert.equal(result.never_mined, true);
   assert.equal(result.unmined_count, null);
-  assert.equal(result.latest_upload_at, "2026-07-17T10:00:00Z");
+  assert.equal(result.latest_upload_at, classified[0]?.published_at);
+  assert.equal(result.shorts_count, 1);
+  assert.equal(result.pending_classification_count, 1);
+  assert.equal(
+    seedFreshnessIsFullyMined(
+      result.never_mined,
+      result.unmined_count,
+      result.pending_classification_count,
+    ),
+    false,
+  );
+});
+
+test("lower-bound flag requires a full feed, unmined long-form, and no stored boundary", () => {
+  const noBoundary = [
+    classifiedRssEntry("unmined-long-form", 0, 0),
+    ...Array.from(
+      { length: YOUTUBE_RSS_ENTRY_LIMIT - 1 },
+      (_, index) => classifiedRssEntry(`short-${index}`, 1, index + 1),
+    ),
+  ];
+  const withBoundary = [
+    ...noBoundary.slice(0, YOUTUBE_RSS_ENTRY_LIMIT - 1),
+    classifiedRssEntry("stored-boundary", 0, YOUTUBE_RSS_ENTRY_LIMIT - 1),
+  ];
+  const stored = [{ video_id: "stored-boundary", published_at: "2026-07-01T00:00:00Z" }];
+
+  const lowerBound = deriveSeedFreshness(
+    rawRssEntries(noBoundary),
+    noBoundary,
+    CHECKED_AT,
+    stored,
+    30,
+  );
+  const bounded = deriveSeedFreshness(
+    rawRssEntries(withBoundary),
+    withBoundary,
+    CHECKED_AT,
+    stored,
+    30,
+  );
+  const shortFeed = deriveSeedFreshness(
+    rawRssEntries(noBoundary.slice(0, 14)),
+    noBoundary.slice(0, 14),
+    CHECKED_AT,
+    stored,
+    30,
+  );
+
+  assert.equal(lowerBound.unmined_count, 1);
+  assert.equal(lowerBound.unmined_is_lower_bound, true);
+  assert.equal(bounded.unmined_count, 1);
+  assert.equal(bounded.unmined_is_lower_bound, false);
+  assert.equal(shortFeed.unmined_count, 1);
+  assert.equal(shortFeed.unmined_is_lower_bound, false);
 });
 
 test("an empty successful YouTube feed is preserved as zero RSS entries", async () => {
@@ -302,8 +433,18 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
 
   assert.match(worker, /seedFreshnessMatch = url\.pathname\.match/);
   assert.match(handler, /fetchYouTubeRssUploads/);
+  assert.doesNotMatch(handler, /FROM videos[\s\S]*?LIMIT 100/);
   assert.doesNotMatch(handler, /ScrapeCreatorsClient|requireUnlockedSeed/);
   assert.match(api, /refreshSeedFreshness\(channelId: string, force = false\)/);
+  assert.match(api, /shorts_count: number;/);
+  assert.match(api, /pending_classification_count: number;/);
+  assert.match(api, /fully_mined: boolean;/);
+  assert.match(worker, /freshness\.shorts_count AS freshness_shorts_count/);
+  assert.match(
+    worker,
+    /freshness\.pending_classification_count AS freshness_pending_classification_count/,
+  );
+  assert.match(worker, /fully_mined: seedFreshnessIsFullyMined/);
   assert.match(app, /Check freshness/);
   assert.match(app, /15\+|unmined_is_lower_bound/);
   assert.match(app, /upload ore, not a channel count/);

@@ -143,13 +143,23 @@ test("locked seeds can refresh read-only RSS freshness without unlocking", async
       testEnv(state.db),
     );
     assert.equal(response.status, 200);
-    const body = await response.json() as { never_mined: boolean; unmined_count: number | null; status: string };
+    const body = await response.json() as {
+      never_mined: boolean;
+      unmined_count: number | null;
+      shorts_count: number;
+      pending_classification_count: number;
+      fully_mined: boolean;
+      status: string;
+    };
     assert.deepEqual(body, {
       ...body,
       never_mined: true,
       unmined_count: null,
       status: "ok",
     });
+    assert.equal(body.shorts_count, 1);
+    assert.equal(body.pending_classification_count, 0);
+    assert.equal(body.fully_mined, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -172,6 +182,8 @@ test("failed forced freshness preserves the last good row and marks it stale", a
     unmined_is_lower_bound: 0,
     never_mined: 1,
     rss_entry_count: 15,
+    shorts_count: 0,
+    pending_classification_count: 0,
     status: "ok",
     error: null,
     checked_at: "2026-07-16T12:05:00Z",

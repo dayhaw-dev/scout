@@ -143,6 +143,9 @@ export interface SeedMiningFreshness {
   unmined_is_lower_bound: boolean;
   never_mined: boolean;
   rss_entry_count: number;
+  shorts_count: number;
+  pending_classification_count: number;
+  fully_mined: boolean;
   status: "ok" | "empty" | "error";
   error: string | null;
   checked_at: string;

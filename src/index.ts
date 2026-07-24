@@ -71,7 +71,7 @@ import {
   PersistedSeedRssEntry,
   SEED_RSS_ENTRY_UPSERT_SQL,
   seedFreshnessCacheIsUsable,
-  seedRssSnapshotAggregates,
+  seedFreshnessIsFullyMined,
   StoredSeedVideo,
 } from "./lib/seed-freshness";
 import {
@@ -411,6 +411,8 @@ async function listChannels(url: URL, env: Env): Promise<Response> {
         freshness.unmined_is_lower_bound AS freshness_unmined_is_lower_bound,
         freshness.never_mined AS freshness_never_mined,
         freshness.rss_entry_count AS freshness_rss_entry_count,
+        freshness.shorts_count AS freshness_shorts_count,
+        freshness.pending_classification_count AS freshness_pending_classification_count,
         freshness.status AS freshness_status,
         freshness.error AS freshness_error,
         freshness.checked_at AS freshness_checked_at
@@ -558,7 +560,7 @@ async function persistAndClassifySeedRssEntries(
     currentEntries = await currentSeedRssEntries(env, channelId, checkedAt);
   }
 
-  return seedRssSnapshotAggregates(currentEntries, checkedAt);
+  return currentEntries;
 }
 
 async function refreshSeedFreshness(
@@ -606,12 +608,7 @@ async function refreshSeedFreshness(
   const stored = await env.SCOUT_DB.prepare(
     `SELECT video_id, published_at
     FROM videos
-    WHERE channel_id = ?
-    ORDER BY
-      CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
-      datetime(published_at) DESC,
-      created_at DESC
-    LIMIT 100`,
+    WHERE channel_id = ?`,
   )
     .bind(channelId)
     .all<StoredSeedVideo>();
@@ -620,7 +617,7 @@ async function refreshSeedFreshness(
   let row: SeedFreshnessCacheRow;
   try {
     const rssEntries = await fetchYouTubeRssUploads(channelId);
-    const rssAggregates = await persistAndClassifySeedRssEntries(
+    const classifiedEntries = await persistAndClassifySeedRssEntries(
       env,
       channelId,
       rssEntries,
@@ -628,13 +625,14 @@ async function refreshSeedFreshness(
     );
     const derived = deriveSeedFreshness(
       rssEntries,
+      classifiedEntries,
+      checkedAt,
       stored.results,
       stats.stored_video_count,
     );
     row = {
       channel_id: channelId,
       ...derived,
-      ...rssAggregates,
       unmined_is_lower_bound: derived.unmined_is_lower_bound ? 1 : 0,
       never_mined: derived.never_mined ? 1 : 0,
       status: rssEntries.length === 0 ? "empty" : "ok",
@@ -765,6 +763,13 @@ function seedFreshnessPayload(row: SeedFreshnessCacheRow): SeedFreshnessView {
     unmined_is_lower_bound: row.unmined_is_lower_bound === 1,
     never_mined: row.never_mined === 1,
     rss_entry_count: Number(row.rss_entry_count),
+    shorts_count: Number(row.shorts_count),
+    pending_classification_count: Number(row.pending_classification_count),
+    fully_mined: seedFreshnessIsFullyMined(
+      row.never_mined === 1,
+      row.unmined_count === null ? null : Number(row.unmined_count),
+      Number(row.pending_classification_count),
+    ),
     status: row.status,
     error: row.error,
     checked_at: row.checked_at,
@@ -783,8 +788,8 @@ function seedFreshnessView(row: SeedListRow): SeedFreshnessView | null {
     unmined_is_lower_bound: Number(row.freshness_unmined_is_lower_bound ?? 0),
     never_mined: Number(row.freshness_never_mined ?? 0),
     rss_entry_count: Number(row.freshness_rss_entry_count ?? 0),
-    shorts_count: 0,
-    pending_classification_count: 0,
+    shorts_count: Number(row.freshness_shorts_count ?? 0),
+    pending_classification_count: Number(row.freshness_pending_classification_count ?? 0),
     status: row.freshness_status,
     error: row.freshness_error,
     checked_at: row.freshness_checked_at,
@@ -3558,6 +3563,8 @@ interface SeedListRow extends ChannelRow {
   freshness_unmined_is_lower_bound: number | null;
   freshness_never_mined: number | null;
   freshness_rss_entry_count: number | null;
+  freshness_shorts_count: number | null;
+  freshness_pending_classification_count: number | null;
   freshness_status: SeedFreshnessStatus | null;
   freshness_error: string | null;
   freshness_checked_at: string | null;
@@ -3592,6 +3599,9 @@ interface SeedFreshnessView {
   unmined_is_lower_bound: boolean;
   never_mined: boolean;
   rss_entry_count: number;
+  shorts_count: number;
+  pending_classification_count: number;
+  fully_mined: boolean;
   status: SeedFreshnessStatus;
   error: string | null;
   checked_at: string;

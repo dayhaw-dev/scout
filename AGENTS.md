@@ -38,7 +38,8 @@ This file is the repository's operating memory. Read it fully before making chan
 ## Known design facts (for future work)
 
 - Expand pages `/v1/youtube/channel-videos` from page one every time. No cursor or offset is persisted per seed. Provider-default ordering is used. Upserts deduplicate stored rows, but previously seen pages are fetched and paid for again.
-- RSS freshness reads `youtube.com/feeds/videos.xml`, which exposes the latest 15 entries, includes Shorts, and provides no content-type field. It computes unmined as the position of the first stored match and caches aggregates only, discarding the RSS video IDs.
+- RSS freshness reads `youtube.com/feeds/videos.xml`, which exposes the latest 15 entries, includes Shorts, and provides no content-type field. Current entries are persisted in `seed_rss_entries` and classified strictly with manual-redirect `HEAD /shorts/<video_id>` requests; ambiguous responses remain pending rather than being guessed.
+- UNMINED is classified-set membership: current `is_short = 0` entries absent from stored videos. Shorts and pending entries never count as ore, and pending classification prevents a seed from being considered fully mined.
 - In observed data, `/channel-videos` returns long-form videos only. Shorts present in RSS are not fetchable by the current Expand flow.
 - Decision (Jul 23): SCOUT does not mine Shorts; they are thin ore. UNMINED must count long-form uploads only.
 - `getVideoDetails(videoId)` exists in the client and costs one credit per video, but it is currently unused. Its response uses `publishDate`, while channel-video page items use `publishedTime`; an adapter is required if it is ever used.

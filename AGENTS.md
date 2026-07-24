@@ -29,6 +29,11 @@ This file is the repository's operating memory. Read it fully before making chan
 - Cron weekday numbers are `1=Sunday` through `7=Saturday`. Always use named days such as `MON,THU`; numeric weekdays already caused a silent wrong-day bug.
 - Deploy with `wrangler deploy` through the release configuration. Local Miniflare state lives in `.wrangler` and is not production.
 
+## Local dev setup
+
+- Manual admin API calls require `SCOUT_ADMIN_KEY` in the gitignored root `.dev.vars` file or in the shell environment.
+- Fresh clones must restore `SCOUT_ADMIN_KEY` from Gene's password manager. Never commit or print the key.
+
 ## Verification discipline
 
 - Work on one named change at a time. Commit and push together, keep one feature per commit, and leave a clean working tree at the end of every session.

@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  classifyPendingSeedLiveEntries,
   classifyPendingSeedRssEntries,
+  classifyYouTubeLiveVod,
   classifyYouTubeShort,
   deriveSeedFreshness,
   fetchYouTubeRssUploads,
   PersistedSeedRssEntry,
+  SEED_CLASSIFICATION_REQUEST_CAP,
+  SEED_LIVE_CLASSIFICATION_DELAY_MS,
+  SEED_LIVE_CLASSIFICATION_MAX_BYTES,
+  SEED_LIVE_CLASSIFICATION_REQUEST_CAP,
+  SEED_LIVE_CLASSIFICATION_TIMEOUT_MS,
+  SEED_LIVE_CLASSIFICATION_VERSION,
   SEED_RSS_ENTRY_UPSERT_SQL,
   SEED_SHORTS_CLASSIFICATION_REQUEST_CAP,
   seedFreshnessCacheIsFresh,
@@ -53,6 +61,7 @@ function classifiedRssEntry(
   isShort: 0 | 1 | null,
   feedPosition: number,
   publishedAt = new Date(Date.UTC(2026, 6, 23, 12 - feedPosition)).toISOString(),
+  isLive: 0 | 1 | null = isShort === 0 ? 0 : null,
 ): PersistedSeedRssEntry {
   return {
     channel_id: "seed",
@@ -64,6 +73,10 @@ function classifiedRssEntry(
     classification_attempted_at: CHECKED_AT,
     classified_at: isShort === null ? null : CHECKED_AT,
     classification_error: isShort === null ? "pending" : null,
+    is_live: isLive,
+    live_classification_attempted_at: isLive === null ? null : CHECKED_AT,
+    live_classified_at: isLive === null ? null : CHECKED_AT,
+    live_classification_error: null,
     first_seen_at: CHECKED_AT,
     last_seen_at: CHECKED_AT,
   };
@@ -75,6 +88,21 @@ function rawRssEntries(entries: PersistedSeedRssEntry[]): RecentVideo[] {
     video_title: entry.title,
     published_at: entry.published_at,
   }));
+}
+
+function watchPage(videoId: string, isLiveContent: boolean): string {
+  return `<html><script>var ytInitialPlayerResponse = ${JSON.stringify({
+    videoDetails: {
+      videoId,
+      isLiveContent,
+      title: "A title with { balanced } braces",
+      thumbnail: { thumbnails: [] },
+    },
+  })};</script></html>`;
+}
+
+function pendingLiveEntry(videoId: string, feedPosition: number): PersistedSeedRssEntry {
+  return classifiedRssEntry(videoId, 0, feedPosition, undefined, null);
 }
 
 test("all-Shorts RSS window reports zero long-form unmined for a mined seed", () => {
@@ -309,6 +337,10 @@ test("Shorts classification is capped at 30 requests per invocation", async () =
     classification_attempted_at: null,
     classified_at: null,
     classification_error: null,
+    is_live: null,
+    live_classification_attempted_at: null,
+    live_classified_at: null,
+    live_classification_error: null,
     first_seen_at: checkedAt,
     last_seen_at: checkedAt,
   }));
@@ -333,6 +365,242 @@ test("Shorts classification is capped at 30 requests per invocation", async () =
   assert.equal(attempts.every((attempt) => attempt.is_short === 1), true);
 });
 
+test("strict streamed live classifier accepts only validated videoDetails objects", async () => {
+  const seenOptions: RequestInit[] = [];
+  const live = await classifyYouTubeLiveVod("live-id", async (_input, options) => {
+    seenOptions.push(options ?? {});
+    return new Response(watchPage("live-id", true), { status: 200 });
+  });
+  const ordinary = await classifyYouTubeLiveVod("ordinary-id", async (_input, options) => {
+    seenOptions.push(options ?? {});
+    return new Response(watchPage("ordinary-id", false), { status: 200 });
+  });
+
+  assert.deepEqual(live, { is_live: 1, error: null });
+  assert.deepEqual(ordinary, { is_live: 0, error: null });
+  assert.deepEqual(
+    seenOptions.map(({ method, redirect, headers, signal }) => ({
+      method,
+      redirect,
+      headers,
+      hasSignal: signal instanceof AbortSignal,
+    })),
+    Array.from({ length: 2 }, () => ({
+      method: "GET",
+      redirect: "follow",
+      headers: { accept: "text/html" },
+      hasSignal: true,
+    })),
+  );
+});
+
+test("live classifier leaves mismatched, malformed, and truncated details pending with exact errors", async () => {
+  const mismatch = await classifyYouTubeLiveVod(
+    "requested-id",
+    async () => new Response(watchPage("different-id", true)),
+  );
+  const malformed = await classifyYouTubeLiveVod(
+    "malformed-id",
+    async () => new Response('<script>{"videoDetails":{"videoId":"malformed-id","isLiveContent":tru}}</script>'),
+  );
+  const truncated = await classifyYouTubeLiveVod(
+    "truncated-id",
+    async () => new Response('<script>{"videoDetails":{"videoId":"truncated-id","isLiveContent":true'),
+  );
+  const missingBoolean = await classifyYouTubeLiveVod(
+    "missing-boolean",
+    async () => new Response('<script>{"videoDetails":{"videoId":"missing-boolean"}}</script>'),
+  );
+
+  assert.deepEqual(mismatch, {
+    is_live: null,
+    error: "Live classification videoId mismatch: expected requested-id.",
+  });
+  assert.deepEqual(malformed, {
+    is_live: null,
+    error: "Live classification videoDetails object was malformed or truncated.",
+  });
+  assert.deepEqual(truncated, {
+    is_live: null,
+    error: "Live classification videoDetails object was malformed or truncated.",
+  });
+  assert.deepEqual(missingBoolean, {
+    is_live: null,
+    error: "Live classification isLiveContent was not boolean.",
+  });
+});
+
+test("live classifier stops at the hard one-MiB streamed body limit", async () => {
+  const result = await classifyYouTubeLiveVod(
+    "after-limit",
+    async () => new Response(
+      `${"x".repeat(SEED_LIVE_CLASSIFICATION_MAX_BYTES)}${watchPage("after-limit", true)}`,
+    ),
+  );
+
+  assert.equal(SEED_LIVE_CLASSIFICATION_MAX_BYTES, 1024 * 1024);
+  assert.deepEqual(result, {
+    is_live: null,
+    error: `Live classification response exceeded ${SEED_LIVE_CLASSIFICATION_MAX_BYTES}-byte limit.`,
+  });
+});
+
+test("live classifier records unexpected status, consent, and timeout as non-definitive", async () => {
+  const unexpectedStatus = await classifyYouTubeLiveVod(
+    "status-id",
+    async () => new Response("unavailable", { status: 503 }),
+  );
+  const consent = await classifyYouTubeLiveVod(
+    "consent-id",
+    async () => new Response(
+      "<title>Before you continue to YouTube</title><a href='https://consent.youtube.com/'>continue</a>",
+    ),
+  );
+  const timeout = await classifyYouTubeLiveVod(
+    "timeout-id",
+    async () => {
+      throw new DOMException("aborted", "AbortError");
+    },
+  );
+
+  assert.deepEqual(unexpectedStatus, {
+    is_live: null,
+    error: "Live classification request failed with 503.",
+  });
+  assert.deepEqual(consent, {
+    is_live: null,
+    error: "Live classification reached YouTube consent page.",
+  });
+  assert.deepEqual(timeout, {
+    is_live: null,
+    error: "Live classification request timed out.",
+  });
+  assert.equal(SEED_LIVE_CLASSIFICATION_TIMEOUT_MS, 8_000);
+});
+
+test("live GET eligibility excludes Shorts, stored IDs, known live state, and never-mined seeds", async () => {
+  const entries = [
+    pendingLiveEntry("eligible-long", 0),
+    classifiedRssEntry("short", 1, 1),
+    classifiedRssEntry("short-pending", null, 2),
+    pendingLiveEntry("stored-long", 3),
+    classifiedRssEntry("known-non-live", 0, 4),
+    classifiedRssEntry("known-live", 0, 5, undefined, 1),
+  ];
+  const stored = [
+    { video_id: "stored-long", published_at: CHECKED_AT },
+    { video_id: "stored-boundary", published_at: CHECKED_AT },
+  ];
+  const requested: string[] = [];
+  const attempts = await classifyPendingSeedLiveEntries(entries, stored, stored.length, {
+    fetcher: async (input) => {
+      const videoId = new URL(String(input)).searchParams.get("v") ?? "";
+      requested.push(videoId);
+      return new Response(watchPage(videoId, false));
+    },
+    pause: async () => undefined,
+    now: () => CHECKED_AT,
+  });
+  const neverMined = await classifyPendingSeedLiveEntries(entries, [], 0, {
+    fetcher: async () => {
+      throw new Error("never-mined seed must not fetch watch pages");
+    },
+  });
+
+  assert.deepEqual(requested, ["eligible-long"]);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0]?.is_live, 0);
+  assert.deepEqual(neverMined, []);
+});
+
+test("live GETs are capped at six and also respect the shared 30-attempt ceiling", async () => {
+  const entries = Array.from({ length: 8 }, (_, index) => pendingLiveEntry(`live-${index}`, index));
+  const stored = [{ video_id: "stored-boundary", published_at: CHECKED_AT }];
+  let requests = 0;
+  let pauses = 0;
+  const classify = async (classificationAttemptsUsed: number) => classifyPendingSeedLiveEntries(
+    entries,
+    stored,
+    30,
+    {
+      classificationAttemptsUsed,
+      limit: 100,
+      fetcher: async (input) => {
+        requests += 1;
+        const videoId = new URL(String(input)).searchParams.get("v") ?? "";
+        return new Response(watchPage(videoId, false));
+      },
+      pause: async (ms) => {
+        assert.equal(ms, SEED_LIVE_CLASSIFICATION_DELAY_MS);
+        pauses += 1;
+      },
+      now: () => CHECKED_AT,
+    },
+  );
+
+  const liveCap = await classify(0);
+  assert.equal(SEED_CLASSIFICATION_REQUEST_CAP, 30);
+  assert.equal(SEED_LIVE_CLASSIFICATION_REQUEST_CAP, 6);
+  assert.equal(SEED_LIVE_CLASSIFICATION_DELAY_MS, 350);
+  assert.equal(liveCap.length, 6);
+  assert.equal(requests, 6);
+  assert.equal(pauses, 5);
+
+  requests = 0;
+  pauses = 0;
+  const sharedCap = await classify(28);
+  assert.equal(sharedCap.length, 2);
+  assert.equal(requests, 2);
+  assert.equal(pauses, 1);
+});
+
+test("current-snapshot live aggregates count definitive live and only eligible pending rows", () => {
+  const priorCheckedAt = "2026-07-23T06:00:00.000Z";
+  const currentLive = classifiedRssEntry("current-live", 0, 0, undefined, 1);
+  const currentPending = pendingLiveEntry("current-pending", 1);
+  const storedPending = pendingLiveEntry("stored-pending", 2);
+  const priorLive = classifiedRssEntry("prior-live", 0, 3, undefined, 1);
+  priorLive.last_seen_at = priorCheckedAt;
+
+  assert.deepEqual(
+    seedRssSnapshotAggregates(
+      [currentLive, currentPending, storedPending, priorLive],
+      CHECKED_AT,
+      [{ video_id: "stored-pending", published_at: CHECKED_AT }],
+      30,
+    ),
+    {
+      shorts_count: 0,
+      pending_classification_count: 0,
+      live_count: 1,
+      pending_live_classification_count: 1,
+    },
+  );
+});
+
+test("step 2 persists live aggregates and version without changing unmined semantics", () => {
+  const live = classifiedRssEntry("missing-live", 0, 0, undefined, 1);
+  const result = deriveSeedFreshness(
+    rawRssEntries([live]),
+    [live],
+    CHECKED_AT,
+    [{ video_id: "stored-boundary", published_at: CHECKED_AT }],
+    30,
+  );
+  const worker = readFileSync("src/index.ts", "utf8");
+
+  assert.equal(result.unmined_count, 1);
+  assert.equal(result.live_count, 1);
+  assert.equal(result.pending_live_classification_count, 0);
+  assert.equal(SEED_LIVE_CLASSIFICATION_VERSION, 1);
+  assert.match(worker, /live_classification_version: SEED_LIVE_CLASSIFICATION_VERSION/);
+  assert.match(worker, /live_count = excluded\.live_count/);
+  assert.match(
+    worker,
+    /pending_live_classification_count = excluded\.pending_live_classification_count/,
+  );
+});
+
 test("RSS snapshot aggregates exclude rows not seen in the current pass", () => {
   const checkedAt = "2026-07-23T12:00:00.000Z";
   const priorCheckedAt = "2026-07-23T06:00:00.000Z";
@@ -350,6 +618,10 @@ test("RSS snapshot aggregates exclude rows not seen in the current pass", () => 
     classification_attempted_at: null,
     classified_at: isShort === null ? null : checkedAt,
     classification_error: null,
+    is_live: isShort === 0 ? 0 : null,
+    live_classification_attempted_at: isShort === 0 ? checkedAt : null,
+    live_classified_at: isShort === 0 ? checkedAt : null,
+    live_classification_error: null,
     first_seen_at: priorCheckedAt,
     last_seen_at: lastSeenAt,
   });
@@ -362,7 +634,12 @@ test("RSS snapshot aggregates exclude rows not seen in the current pass", () => 
       entry("prior-short", 1, priorCheckedAt),
       entry("prior-pending", null, priorCheckedAt),
     ], checkedAt),
-    { shorts_count: 1, pending_classification_count: 1 },
+    {
+      shorts_count: 1,
+      pending_classification_count: 1,
+      live_count: 0,
+      pending_live_classification_count: 0,
+    },
   );
 });
 
@@ -377,6 +654,7 @@ test("RSS entry upsert preserves first-seen and all prior classification fields"
   assert.doesNotMatch(updateClause, /first_seen_at/);
   assert.doesNotMatch(updateClause, /is_short/);
   assert.doesNotMatch(updateClause, /classification_attempted_at|classified_at|classification_error/);
+  assert.doesNotMatch(updateClause, /is_live|live_classification/);
 });
 
 test("six-hour cache also invalidates immediately when stored coverage changes", () => {

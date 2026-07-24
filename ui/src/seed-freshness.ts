@@ -3,7 +3,7 @@ import type { SeedMiningFreshness } from "./api";
 export const SEED_FRESHNESS_PACING_MIN_MS = 700;
 export const SEED_FRESHNESS_PACING_MAX_MS = 1_100;
 export const SEED_RSS_WINDOW_TOOLTIP =
-  "UNMINED counts only long-form uploads within YouTube's latest 15 RSS entries. Shorts consume RSS window slots, so older long-form uploads may sit outside visibility.";
+  "UNMINED counts only fetchable, non-live long-form uploads within YouTube's latest 15 RSS entries. Shorts and archived live VODs are not mined and consume RSS window slots, so older fetchable uploads may sit outside visibility.";
 
 export interface SeedOrePresentation {
   value: string;
@@ -29,11 +29,18 @@ export function seedFreshnessSecondaryNote(
 ): string | null {
   if (!freshness) return null;
   const shorts = Math.max(0, freshness.shorts_count);
-  const pending = Math.max(0, freshness.pending_classification_count);
-  if (shorts > 0 && pending > 0) return `+${shorts} SHORTS · ${pending} PENDING`;
-  if (shorts > 0) return `+${shorts} SHORTS · NOT MINED`;
-  if (pending > 0) return `${pending} PENDING CLASSIFICATION`;
-  return null;
+  const live = Math.max(0, freshness.live_count);
+  const pendingShorts = Math.max(0, freshness.pending_classification_count);
+  const pendingLive = Math.max(0, freshness.pending_live_classification_count);
+  const noteParts: string[] = [];
+
+  if (shorts > 0) noteParts.push(`+${shorts} SHORTS`);
+  if (live > 0) noteParts.push(`+${live} LIVE`);
+  if (noteParts.length > 0) noteParts.push("NOT MINED");
+  if (pendingShorts > 0) noteParts.push(`${pendingShorts} PENDING CLASSIFICATION`);
+  if (pendingLive > 0) noteParts.push(`${pendingLive} LIVE PENDING CLASSIFICATION`);
+
+  return noteParts.length > 0 ? noteParts.join(" · ") : null;
 }
 
 export function seedOrePresentation(

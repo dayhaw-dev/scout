@@ -4480,7 +4480,8 @@ function freshnessPendingSortValue(seed: RawChannelRow): number {
   const freshness = seed.mining_freshness;
   if (!freshness) return -2;
   if (freshness.status !== "ok") return -1;
-  return freshness.pending_classification_count;
+  return freshness.pending_classification_count
+    + freshness.pending_live_classification_count;
 }
 
 function freshnessUploadTime(seed: RawChannelRow): number {

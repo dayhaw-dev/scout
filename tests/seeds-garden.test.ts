@@ -6,6 +6,7 @@ const app = readFileSync("ui/src/App.tsx", "utf8");
 const api = readFileSync("ui/src/api.ts", "utf8");
 const source = readFileSync("src/index.ts", "utf8");
 const styles = readFileSync("ui/src/styles.css", "utf8");
+const seedFreshness = readFileSync("ui/src/seed-freshness.ts", "utf8");
 
 test("Seeds is an ore-first row garden with no score surface", () => {
   assert.match(app, /className="view seeds-garden"/);
@@ -36,9 +37,15 @@ test("Seed garden exposes the requested stats, columns, prices, and mined-out sp
   assert.match(app, /MINED OUT/);
   assert.match(app, /seed\.mining_freshness\?\.fully_mined === true/);
   assert.match(app, /freshnessPendingSortValue\(b\) - freshnessPendingSortValue\(a\)/);
+  assert.match(app, /freshness\.pending_classification_count[\s\S]*?freshness\.pending_live_classification_count/);
   assert.match(app, /summary\.unmined \+= unmined/);
   assert.match(app, /unmined > 0 && freshness\.unmined_is_lower_bound/);
   assert.match(app, /seed-upload-fresh/);
+  assert.match(seedFreshness, /`\+\$\{live\} LIVE`/);
+  assert.match(seedFreshness, /`\$\{pendingLive\} LIVE PENDING CLASSIFICATION`/);
+  assert.match(seedFreshness, /noteParts\.join\(" · "\)/);
+  assert.match(app, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(app, /seedOrePresentation\(freshness\)/);
 });
 
 test("Seed lock reason is carried from D1 and shown without weakening API fences", () => {

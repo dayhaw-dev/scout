@@ -818,12 +818,23 @@ test("seed freshness client pacing adds bounded jitter between sequential reques
   assert.ok(seedFreshnessPacingMs(0.5) < SEED_FRESHNESS_PACING_MAX_MS);
 });
 
-test("seed ore UI distinguishes mined, pending, lower-bound, and Shorts states honestly", () => {
+test("seed ore UI distinguishes mined, pending, lower-bound, Shorts, and live states honestly", () => {
   const simone = seedOrePresentation(uiFreshness({ shorts_count: 15 }));
   assert.equal(simone.value, "0");
   assert.equal(simone.label, "MINED");
   assert.equal(simone.note, "+15 SHORTS · NOT MINED");
   assert.equal(simone.tone, "mined");
+
+  const cityPlanner = seedOrePresentation(uiFreshness({ live_count: 6 }));
+  assert.equal(cityPlanner.value, "0");
+  assert.equal(cityPlanner.label, "MINED");
+  assert.equal(cityPlanner.note, "+6 LIVE · NOT MINED");
+  assert.equal(cityPlanner.tone, "mined");
+
+  assert.equal(
+    seedFreshnessSecondaryNote(uiFreshness({ shorts_count: 4, live_count: 6 })),
+    "+4 SHORTS · +6 LIVE · NOT MINED",
+  );
 
   const pending = seedOrePresentation(uiFreshness({
     fully_mined: false,
@@ -833,6 +844,15 @@ test("seed ore UI distinguishes mined, pending, lower-bound, and Shorts states h
   assert.equal(pending.label, "UNMINED");
   assert.equal(pending.note, "3 PENDING CLASSIFICATION");
   assert.equal(pending.tone, "pending");
+
+  const livePending = seedOrePresentation(uiFreshness({
+    fully_mined: false,
+    pending_live_classification_count: 2,
+  }));
+  assert.equal(livePending.value, "0");
+  assert.equal(livePending.label, "UNMINED");
+  assert.equal(livePending.note, "2 LIVE PENDING CLASSIFICATION");
+  assert.equal(livePending.tone, "pending");
 
   assert.equal(
     seedOrePresentation(uiFreshness({ unmined_is_lower_bound: true })).value,
@@ -848,14 +868,24 @@ test("seed ore UI distinguishes mined, pending, lower-bound, and Shorts states h
   );
   assert.equal(
     seedFreshnessSecondaryNote(uiFreshness({ shorts_count: 4, pending_classification_count: 2 })),
-    "+4 SHORTS · 2 PENDING",
+    "+4 SHORTS · NOT MINED · 2 PENDING CLASSIFICATION",
+  );
+  assert.equal(
+    seedFreshnessSecondaryNote(uiFreshness({
+      shorts_count: 4,
+      live_count: 6,
+      pending_classification_count: 2,
+      pending_live_classification_count: 3,
+    })),
+    "+4 SHORTS · +6 LIVE · NOT MINED · 2 PENDING CLASSIFICATION · 3 LIVE PENDING CLASSIFICATION",
   );
 });
 
 test("seed ore UI tooltip states the long-form RSS window caveat", () => {
-  assert.match(SEED_RSS_WINDOW_TOOLTIP, /long-form uploads/);
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /fetchable, non-live long-form uploads/);
   assert.match(SEED_RSS_WINDOW_TOOLTIP, /latest 15 RSS entries/);
-  assert.match(SEED_RSS_WINDOW_TOOLTIP, /Shorts consume RSS window slots/);
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /Shorts and archived live VODs are not mined/);
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /older fetchable uploads may sit outside visibility/);
 });
 
 test("freshness migration adds a dependent cache table without rebuilding channels", () => {

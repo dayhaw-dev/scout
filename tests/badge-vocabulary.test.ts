@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const app = readFileSync("ui/src/App.tsx", "utf8");
+const seedFreshness = readFileSync("ui/src/seed-freshness.ts", "utf8");
 const styles = readFileSync("ui/src/styles.css", "utf8");
 
 test("channel cards use the three-tier badge vocabulary", () => {
@@ -18,8 +19,11 @@ test("channel cards use the three-tier badge vocabulary", () => {
   assert.match(app, /badge-alert locked-chip/);
 
   assert.match(app, /badge-attribute active-relationship-chip">ACTIVE/);
-  assert.match(app, /seed-ore-tile.*ore-high/);
-  assert.match(app, /seed-ore-tile.*ore-mined/);
+  assert.match(seedFreshness, /count >= 8 \? "high"/);
+  assert.match(app, /className=\{`seed-ore-tile ore-\$\{presentation\.tone\}`\}/);
+  assert.match(styles, /\.seed-ore-tile\.ore-high/);
+  assert.match(seedFreshness, /tone: fullyMined \? "mined"/);
+  assert.match(app, /className=\{`seed-ore-tile ore-\$\{presentation\.tone\}`\}/);
   assert.match(app, /badge-attribute no-trend-chip">NO TREND/);
   assert.doesNotMatch(app, />TRACKING/);
 });

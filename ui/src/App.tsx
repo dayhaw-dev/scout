@@ -25,7 +25,7 @@ import { BulkController, BulkProgress, runBulkOperation } from "./bulk";
 import { HOT_CONFIG, REACH_CONFIG } from "./config";
 import { loadDiscoveryDefaults, saveDiscoveryDefaults } from "./discovery-defaults";
 import type { DiscoveryDefaults, SearchCreditCapMode, UploadWindow } from "./discovery-defaults";
-import { seedFreshnessPacingMs } from "./seed-freshness";
+import { seedFreshnessPacingMs, seedOrePresentation } from "./seed-freshness";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
@@ -1943,7 +1943,7 @@ function SeedsView({
         <>
           <div className="seed-honesty-line">
             <strong>ORE REMAINING</strong>
-            <span>{oreSeeds.length} SEEDS · SORTED {seedSort.replace(/_/g, " ").toUpperCase()} · RSS COUNTS CAP AT 15+ PER SEED · INCLUDES SHORTS</span>
+            <span>{oreSeeds.length} SEEDS · SORTED {seedSort.replace(/_/g, " ").toUpperCase()} · LONG-FORM ONLY · LATEST 15 RSS ENTRIES · SHORTS USE WINDOW SLOTS</span>
           </div>
           <div className="seed-rows" role="table" aria-label="Seeds with ore remaining">
             {oreSeeds.map((seed) => (
@@ -3387,18 +3387,14 @@ function SeedRow({
 }
 
 function SeedOreTile({ freshness }: { freshness: SeedMiningFreshness | null }) {
-  if (!freshness) return <div className="seed-ore-tile ore-pending"><strong>--</strong><span>CHECKING</span></div>;
-  if (freshness.never_mined) return <div className="seed-ore-tile ore-never"><strong>!</strong><span>NEVER MINED</span></div>;
-  if (freshness.status === "error") return <div className="seed-ore-tile ore-error" title={freshness.error ?? undefined}><strong>!</strong><span>RSS ERROR</span></div>;
-  if (freshness.status === "empty") return <div className="seed-ore-tile ore-pending"><strong>0</strong><span>NO RSS</span></div>;
-  const count = freshness.unmined_count ?? 0;
-  const title = freshness.error ?? (count > 0
-    ? "Recent RSS uploads not present in stored expansion videos. Includes Shorts; this is upload ore, not a channel count."
-    : "All recent RSS uploads are represented in stored expansion videos.");
+  const presentation = seedOrePresentation(freshness);
   return (
-    <div className={`seed-ore-tile ${count >= 8 ? "ore-high" : count > 0 ? "ore-low" : "ore-mined"}`} title={title}>
-      <strong>{count}{freshness.unmined_is_lower_bound ? "+" : ""}</strong>
-      <span>{count > 0 ? "UNMINED" : "MINED"}{freshness.stale ? " · STALE" : ""}</span>
+    <div className="seed-ore-cell">
+      <div className={`seed-ore-tile ore-${presentation.tone}`} title={presentation.title}>
+        <strong>{presentation.value}</strong>
+        <span>{presentation.label}</span>
+      </div>
+      {presentation.note && <small className="seed-freshness-note">{presentation.note}</small>}
     </div>
   );
 }
@@ -4461,6 +4457,8 @@ function sortSeeds(seeds: RawChannelRow[], sort: SeedSortMode): RawChannelRow[] 
     if (sort === "unmined") {
       const unminedDifference = freshnessSortValue(b) - freshnessSortValue(a);
       if (unminedDifference !== 0) return unminedDifference;
+      const pendingDifference = freshnessPendingSortValue(b) - freshnessPendingSortValue(a);
+      if (pendingDifference !== 0) return pendingDifference;
       const latestDifference = freshnessUploadTime(b) - freshnessUploadTime(a);
       if (latestDifference !== 0) return latestDifference;
     }
@@ -4478,19 +4476,20 @@ function freshnessSortValue(seed: RawChannelRow): number {
   return freshness.unmined_count ?? 0;
 }
 
+function freshnessPendingSortValue(seed: RawChannelRow): number {
+  const freshness = seed.mining_freshness;
+  if (!freshness) return -2;
+  if (freshness.status !== "ok") return -1;
+  return freshness.pending_classification_count;
+}
+
 function freshnessUploadTime(seed: RawChannelRow): number {
   const parsed = Date.parse(seed.mining_freshness?.latest_upload_at ?? "");
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function isMinedOutSeed(seed: RawChannelRow): boolean {
-  const freshness = seed.mining_freshness;
-  return Boolean(
-    freshness
-    && freshness.status === "ok"
-    && !freshness.never_mined
-    && (freshness.unmined_count ?? 0) === 0,
-  );
+  return seed.mining_freshness?.fully_mined === true;
 }
 
 function seedLastUploadClass(freshness: SeedMiningFreshness | null): string {
@@ -4516,8 +4515,9 @@ function summarizeSeedGarden(seeds: RawChannelRow[]): {
   }>((summary, seed) => {
     const freshness = seed.mining_freshness;
     if (freshness?.status === "ok" && !freshness.never_mined) {
-      summary.unmined += freshness.unmined_count ?? 0;
-      summary.unminedLowerBound ||= freshness.unmined_is_lower_bound;
+      const unmined = freshness.unmined_count ?? 0;
+      summary.unmined += unmined;
+      summary.unminedLowerBound ||= unmined > 0 && freshness.unmined_is_lower_bound;
     }
     summary.yield += seed.yield_count ?? 0;
     summary.locked += seed.seed_locked ? 1 : 0;

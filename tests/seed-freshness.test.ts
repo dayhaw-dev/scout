@@ -19,10 +19,34 @@ import { RecentVideo } from "../src/lib/sponsor-scan.js";
 import {
   SEED_FRESHNESS_PACING_MAX_MS,
   SEED_FRESHNESS_PACING_MIN_MS,
+  SEED_RSS_WINDOW_TOOLTIP,
   seedFreshnessPacingMs,
+  seedFreshnessSecondaryNote,
+  seedOrePresentation,
 } from "../ui/src/seed-freshness.js";
+import type { SeedMiningFreshness } from "../ui/src/api.js";
 
 const CHECKED_AT = "2026-07-23T12:00:00.000Z";
+
+function uiFreshness(overrides: Partial<SeedMiningFreshness> = {}): SeedMiningFreshness {
+  return {
+    latest_upload_at: "2026-07-23T12:00:00.000Z",
+    newest_stored_video_at: "2026-07-22T12:00:00.000Z",
+    stored_video_count: 30,
+    unmined_count: 0,
+    unmined_is_lower_bound: false,
+    never_mined: false,
+    rss_entry_count: 15,
+    shorts_count: 0,
+    pending_classification_count: 0,
+    fully_mined: true,
+    status: "ok",
+    error: null,
+    checked_at: CHECKED_AT,
+    stale: false,
+    ...overrides,
+  };
+}
 
 function classifiedRssEntry(
   videoId: string,
@@ -415,6 +439,46 @@ test("seed freshness client pacing adds bounded jitter between sequential reques
   assert.ok(seedFreshnessPacingMs(0.5) < SEED_FRESHNESS_PACING_MAX_MS);
 });
 
+test("seed ore UI distinguishes mined, pending, lower-bound, and Shorts states honestly", () => {
+  const simone = seedOrePresentation(uiFreshness({ shorts_count: 15 }));
+  assert.equal(simone.value, "0");
+  assert.equal(simone.label, "MINED");
+  assert.equal(simone.note, "+15 SHORTS · NOT MINED");
+  assert.equal(simone.tone, "mined");
+
+  const pending = seedOrePresentation(uiFreshness({
+    fully_mined: false,
+    pending_classification_count: 3,
+  }));
+  assert.equal(pending.value, "0");
+  assert.equal(pending.label, "UNMINED");
+  assert.equal(pending.note, "3 PENDING CLASSIFICATION");
+  assert.equal(pending.tone, "pending");
+
+  assert.equal(
+    seedOrePresentation(uiFreshness({ unmined_is_lower_bound: true })).value,
+    "0",
+  );
+  assert.equal(
+    seedOrePresentation(uiFreshness({
+      fully_mined: false,
+      unmined_count: 2,
+      unmined_is_lower_bound: true,
+    })).value,
+    "2+",
+  );
+  assert.equal(
+    seedFreshnessSecondaryNote(uiFreshness({ shorts_count: 4, pending_classification_count: 2 })),
+    "+4 SHORTS · 2 PENDING",
+  );
+});
+
+test("seed ore UI tooltip states the long-form RSS window caveat", () => {
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /long-form uploads/);
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /latest 15 RSS entries/);
+  assert.match(SEED_RSS_WINDOW_TOOLTIP, /Shorts consume RSS window slots/);
+});
+
 test("freshness migration adds a dependent cache table without rebuilding channels", () => {
   const migration = readFileSync("migrations/0022_seed_mining_freshness.sql", "utf8");
 
@@ -427,6 +491,7 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   const worker = readFileSync("src/index.ts", "utf8");
   const app = readFileSync("ui/src/App.tsx", "utf8");
   const api = readFileSync("ui/src/api.ts", "utf8");
+  const seedFreshnessUi = readFileSync("ui/src/seed-freshness.ts", "utf8");
   const handler = worker.match(
     /async function refreshSeedFreshness[\s\S]*?async function seedStoredVideoStats/,
   )?.[0] ?? "";
@@ -447,13 +512,15 @@ test("freshness route is RSS-only and remains available to locked seeds", () => 
   assert.match(worker, /fully_mined: seedFreshnessIsFullyMined/);
   assert.match(app, /Check freshness/);
   assert.match(app, /15\+|unmined_is_lower_bound/);
-  assert.match(app, /upload ore, not a channel count/);
+  assert.doesNotMatch(app, /Includes Shorts|upload ore, not a channel count/);
+  assert.match(app, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(app, /seedOrePresentation\(freshness\)/);
   assert.match(app, /Unmined desc/);
-  assert.match(app, /NEVER MINED/);
+  assert.match(seedFreshnessUi, /NEVER MINED/);
   assert.match(app, /seedFreshnessPacingMs/);
   assert.match(app, /freshnessQueueRef/);
   assert.match(app, /freshness\.error/);
-  assert.match(app, /· STALE/);
+  assert.match(seedFreshnessUi, /· STALE/);
 });
 
 test("individual seed expansion reloads its row so freshness updates", () => {

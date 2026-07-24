@@ -3237,14 +3237,31 @@ a:hover {
 .seed-row {
   position: relative;
   display: grid;
-  grid-template-columns: 74px minmax(250px, 1.45fr) 68px 82px 86px 110px 94px 270px;
+  grid-template-columns: 150px minmax(250px, 1.45fr) 68px 82px 86px 110px 94px 270px;
   align-items: center;
   gap: 10px;
-  min-width: 1120px;
+  min-width: 1200px;
   min-height: 54px;
   padding: 5px 10px;
   border-bottom: 1px solid rgba(34, 211, 238, 0.1);
   background: rgba(15, 27, 46, 0.78);
+}
+
+.seed-ore-cell {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.seed-freshness-note {
+  color: #607e8c;
+  font-size: 7px;
+  font-weight: 500;
+  letter-spacing: 0.045em;
+  line-height: 1.25;
+  text-transform: uppercase;
 }
 
 .seed-row:hover,

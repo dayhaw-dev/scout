@@ -47,6 +47,7 @@ test("worker exposes outreach list and log endpoints", () => {
 
 test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status chips", () => {
   const source = readFileSync("ui/src/App.tsx", "utf8");
+  const seedFreshness = readFileSync("ui/src/seed-freshness.ts", "utf8");
 
   assert.match(source, /"outreach"/);
   assert.match(source, /Active \/ working with/i);
@@ -60,7 +61,9 @@ test("ui includes ACTIVE, LIVE, and CLOSED outreach groups with explicit status 
   assert.match(source, /Update status/);
   assert.match(source, /latest_outreach_note/);
   assert.match(source, /Promote to seed/);
-  assert.match(source, /STALE/);
+  assert.match(seedFreshness, /STALE/);
+  assert.match(source, /import \{ seedFreshnessPacingMs, seedOrePresentation \} from "\.\/seed-freshness"/);
+  assert.match(source, /seedOrePresentation\(freshness\)/);
   assert.match(source, /next_followup_at: nextFollowup \|\| null/);
   assert.doesNotMatch(source, /daysFromNowInput/);
   assert.match(source, /Closed — \{closed\.length\}/);

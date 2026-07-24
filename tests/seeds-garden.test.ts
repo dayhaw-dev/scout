@@ -12,12 +12,14 @@ test("Seeds is an ore-first row garden with no score surface", () => {
   assert.match(app, /className="seed-rows" role="table"/);
   assert.match(app, /function SeedRow/);
   assert.match(app, /function SeedOreTile/);
-  assert.match(app, /count >= 8 \? "ore-high" : count > 0 \? "ore-low" : "ore-mined"/);
+  assert.match(app, /seedOrePresentation\(freshness\)/);
+  assert.match(app, /ore-\$\{presentation\.tone\}/);
   assert.match(app, /const \[seedSort, setSeedSort\] = useState<SeedSortMode>\("unmined"\)/);
   assert.doesNotMatch(app, /seed-card/);
   assert.match(styles, /\.seed-row\s*\{[^}]*display: grid/s);
   assert.match(styles, /\.seed-ore-tile\.ore-high\s*\{[^}]*background: #22d3ee/s);
   assert.match(styles, /\.seed-ore-tile\.ore-low\s*\{[^}]*border-color: rgba\(34, 211, 238, 0\.68\)/s);
+  assert.match(styles, /\.seed-freshness-note\s*\{[^}]*color: #607e8c/s);
 });
 
 test("Seed garden exposes the requested stats, columns, prices, and mined-out split", () => {
@@ -30,9 +32,12 @@ test("Seed garden exposes the requested stats, columns, prices, and mined-out sp
   assert.match(app, /Expand All ≤\{EXPAND_ALL_CLIENT_CREDIT_CAP\} CR/);
   assert.match(app, /Snapshot All ≤\{Math\.min\(seeds\.length, 60\)\} CR/);
   assert.match(app, /Regen Queries 0 CR/);
-  assert.match(app, /RSS COUNTS CAP AT 15\+ PER SEED · INCLUDES SHORTS/);
+  assert.match(app, /LONG-FORM ONLY · LATEST 15 RSS ENTRIES · SHORTS USE WINDOW SLOTS/);
   assert.match(app, /MINED OUT/);
-  assert.match(app, /isMinedOutSeed/);
+  assert.match(app, /seed\.mining_freshness\?\.fully_mined === true/);
+  assert.match(app, /freshnessPendingSortValue\(b\) - freshnessPendingSortValue\(a\)/);
+  assert.match(app, /summary\.unmined \+= unmined/);
+  assert.match(app, /unmined > 0 && freshness\.unmined_is_lower_bound/);
   assert.match(app, /seed-upload-fresh/);
 });
 

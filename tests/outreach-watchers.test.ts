@@ -70,7 +70,8 @@ test("baseline captures RSS and prior video scans, then scans uncovered IDs sequ
   assert.match(worker, /fetchYouTubeRssUploads\(watcher\.channel_id\)/);
   assert.match(worker, /latestDistinctSponsorWatcherCoverage/);
   assert.match(worker, /mergeSponsorWatcherBaseline\(rssVideos, scanCoverage\)/);
-  assert.match(worker, /for \(let index = 0; index < missingCoverage\.length; index \+= 1\)/);
+  assert.match(worker, /const toScan = missingCoverage\.slice/);
+  assert.match(worker, /for \(let index = 0; index < toScan\.length; index \+= 1\)/);
   assert.match(worker, /enrichVideosWithSponsorBlock\(\[video\]\)/);
   assert.match(worker, /await delay\(SPONSOR_BASELINE_SCAN_DELAY_MS\)/);
   assert.match(worker, /sponsorblock_has_sponsor = COALESCE\([\s\S]*outreach_watcher_videos\.sponsorblock_has_sponsor/);

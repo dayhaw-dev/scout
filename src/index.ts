@@ -100,8 +100,19 @@ import {
   SPONSOR_BASELINE_RETRY_DELAY_MS,
   SPONSOR_BASELINE_SCAN_DELAY_MS,
   SPONSOR_BASELINE_VIDEO_LIMIT,
+  SPONSOR_WATCHER_DUE_LIMIT,
+  SPONSOR_WATCHER_GLOBAL_SCAN_CAP,
+  SPONSOR_WATCHER_PER_CHANNEL_SCAN_CAP,
   SponsorWatcherBaselineState,
+  SponsorWatcherCheckVideo,
   SponsorWatcherCoverageVideo,
+  roundRobinSponsorWatcherScans,
+  runIsolatedWatcherTasks,
+  runWatcherPhaseBeforeSnapshots,
+  sponsorWatcherScanShouldFire,
+  sponsorWatcherRssPacingMs,
+  sponsorWatcherSnapshotCooldownMs,
+  sponsorWatcherVideoCanFire,
 } from "./lib/outreach-watchers";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
@@ -389,9 +400,24 @@ export default {
     _ctx: ExecutionContext,
   ): Promise<void> {
     await wakeDueSnoozed(env);
-    await runSnapshotJob(env, `${SNAPSHOT_JOB_KIND}:watchlist:cron`, new Date(), {
-      scope: "watchlist",
-      includeSnoozed: true,
+    await runWatcherPhaseBeforeSnapshots({
+      watcherPhase: () => runSponsorWatcherCronPass(env, new Date()),
+      cooldown: () => delay(sponsorWatcherSnapshotCooldownMs()),
+      snapshotPhase: () => runSnapshotJob(
+        env,
+        `${SNAPSHOT_JOB_KIND}:watchlist:cron`,
+        new Date(),
+        {
+          scope: "watchlist",
+          includeSnoozed: true,
+        },
+      ).then(() => undefined),
+      onWatcherError: (error) => {
+        console.error(JSON.stringify({
+          event: "sponsor_watcher_phase_failed",
+          error: errorMessage(error),
+        }));
+      },
     });
   },
 };
@@ -1374,6 +1400,10 @@ async function outreachWatcherById(env: Env, watcherId: number): Promise<Outreac
 async function completeSponsorWatcherBaseline(
   env: Env,
   watcher: OutreachWatcherRow,
+  options: {
+    scanBudget?: SponsorWatcherScanBudget;
+    perWatcherScanCap?: number;
+  } = {},
 ): Promise<OutreachWatcherRow> {
   try {
     const rssVideos = await fetchYouTubeRssUploads(watcher.channel_id);
@@ -1434,10 +1464,17 @@ async function completeSponsorWatcherBaseline(
     const missingCoverage = baseline.filter(
       (video) => video.sponsorblock_has_sponsor === null,
     );
+    const availableBudget = options.scanBudget?.remaining ?? missingCoverage.length;
+    const perWatcherCap = options.perWatcherScanCap ?? missingCoverage.length;
+    const toScan = missingCoverage.slice(0, Math.min(availableBudget, perWatcherCap));
     const scanFailures: string[] = [];
     const newScans: SponsorBlockVideoScan[] = [];
-    for (let index = 0; index < missingCoverage.length; index += 1) {
-      const video = missingCoverage[index];
+    for (let index = 0; index < toScan.length; index += 1) {
+      const video = toScan[index];
+      if (options.scanBudget) {
+        options.scanBudget.remaining -= 1;
+        options.scanBudget.issued += 1;
+      }
       const [scan] = await enrichVideosWithSponsorBlock([video]);
       const scannedAt = new Date().toISOString();
       newScans.push(scan);
@@ -1460,7 +1497,7 @@ async function completeSponsorWatcherBaseline(
       if (scan.error || scan.sponsorblock_has_sponsor === null) {
         scanFailures.push(`${video.video_id}: ${scan.error ?? "SponsorBlock returned no definitive result."}`);
       }
-      if (index < missingCoverage.length - 1) {
+      if (index < toScan.length - 1) {
         await delay(SPONSOR_BASELINE_SCAN_DELAY_MS);
       }
     }
@@ -1477,6 +1514,9 @@ async function completeSponsorWatcherBaseline(
         newest,
       );
     }
+    if (toScan.length < missingCoverage.length) {
+      return markSponsorWatcherBaselinePending(env, watcher, newest);
+    }
 
     const nextCheckAt = new Date(Date.now() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
     await env.SCOUT_DB.prepare(
@@ -1486,6 +1526,7 @@ async function completeSponsorWatcherBaseline(
         baseline_newest_published_at = ?,
         last_checked_at = ?,
         last_error = NULL,
+        last_error_at = NULL,
         next_check_at = ?
       WHERE id = ?
         AND active = 1`,
@@ -1520,6 +1561,7 @@ async function markSponsorWatcherBaselineError(
       baseline_newest_published_at = COALESCE(?, baseline_newest_published_at),
       last_checked_at = ?,
       last_error = ?,
+      last_error_at = ?,
       next_check_at = ?
     WHERE id = ?
       AND active = 1`,
@@ -1529,11 +1571,391 @@ async function markSponsorWatcherBaselineError(
       newest?.published_at ?? null,
       attemptedAt,
       message.slice(0, 2000),
+      attemptedAt,
       nextCheckAt,
       watcher.id,
     )
     .run();
   return (await outreachWatcherById(env, watcher.id)) ?? watcher;
+}
+
+async function markSponsorWatcherBaselinePending(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  newest: { video_id: string; published_at: string | null } | null,
+): Promise<OutreachWatcherRow> {
+  const checkedAt = new Date().toISOString();
+  const nextCheckAt = new Date(Date.now() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
+  await env.SCOUT_DB.prepare(
+    `UPDATE outreach_watchers
+    SET baseline_state = 'pending',
+      baseline_newest_video_id = COALESCE(?, baseline_newest_video_id),
+      baseline_newest_published_at = COALESCE(?, baseline_newest_published_at),
+      last_checked_at = ?,
+      last_error = NULL,
+      last_error_at = NULL,
+      next_check_at = ?
+    WHERE id = ?
+      AND active = 1`,
+  )
+    .bind(
+      newest?.video_id ?? null,
+      newest?.published_at ?? null,
+      checkedAt,
+      nextCheckAt,
+      watcher.id,
+    )
+    .run();
+  return (await outreachWatcherById(env, watcher.id)) ?? watcher;
+}
+
+async function runSponsorWatcherCronPass(
+  env: Env,
+  now: Date,
+): Promise<void> {
+  const nowIso = now.toISOString();
+  const budget: SponsorWatcherScanBudget = {
+    remaining: SPONSOR_WATCHER_GLOBAL_SCAN_CAP,
+    issued: 0,
+  };
+  const baselineRetries = await dueSponsorWatcherBaselineRetries(env, nowIso);
+
+  await runIsolatedWatcherTasks({
+    items: baselineRetries,
+    task: async (watcher) => {
+      await completeSponsorWatcherBaseline(env, watcher, {
+        scanBudget: budget,
+        perWatcherScanCap: SPONSOR_WATCHER_PER_CHANNEL_SCAN_CAP,
+      });
+      await delay(sponsorWatcherRssPacingMs());
+    },
+    onError: async (watcher, error) => {
+      try {
+        await markSponsorWatcherBaselineError(env, watcher, errorMessage(error));
+      } catch (recordError) {
+        console.error(JSON.stringify({
+          event: "sponsor_watcher_baseline_retry_failed",
+          watcher_id: watcher.id,
+          error: errorMessage(error),
+          persistence_error: errorMessage(recordError),
+        }));
+      }
+      await delay(sponsorWatcherRssPacingMs());
+    },
+  });
+
+  const dueWatchers = await dueReadySponsorWatchers(env, nowIso);
+  const watcherById = new Map(dueWatchers.map((watcher) => [watcher.id, watcher]));
+  const queues: Array<{ watcherId: number; videos: SponsorWatcherCheckVideo[] }> = [];
+  const failedWatchers = new Set<number>();
+
+  for (let index = 0; index < dueWatchers.length; index += 1) {
+    const watcher = dueWatchers[index];
+    try {
+      const rssVideos = await fetchYouTubeRssUploads(watcher.channel_id);
+      const checkedAt = new Date().toISOString();
+      await upsertSponsorWatcherRssVideos(env, watcher, rssVideos, checkedAt);
+      const currentRows = await currentSponsorWatcherRssRows(env, watcher.id, checkedAt);
+      queues.push({
+        watcherId: watcher.id,
+        videos: currentRows.filter((video) =>
+          sponsorWatcherVideoCanFire(video, watcher.baseline_cutoff_at, now.getTime())
+        ),
+      });
+    } catch (error) {
+      failedWatchers.add(watcher.id);
+      try {
+        await markSponsorWatcherCheckError(env, watcher, errorMessage(error), now);
+      } catch (recordError) {
+        console.error(JSON.stringify({
+          event: "sponsor_watcher_rss_failed",
+          watcher_id: watcher.id,
+          error: errorMessage(error),
+          persistence_error: errorMessage(recordError),
+        }));
+      }
+    }
+
+    if (index < dueWatchers.length - 1) {
+      await delay(sponsorWatcherRssPacingMs());
+    }
+  }
+
+  const scanPlan = roundRobinSponsorWatcherScans(
+    queues,
+    SPONSOR_WATCHER_PER_CHANNEL_SCAN_CAP,
+    budget.remaining,
+  );
+  const firedWatchers = new Set<number>();
+
+  for (let index = 0; index < scanPlan.length; index += 1) {
+    const item = scanPlan[index];
+    if (firedWatchers.has(item.watcherId) || failedWatchers.has(item.watcherId)) continue;
+    const watcher = watcherById.get(item.watcherId);
+    if (!watcher || watcher.baseline_state !== "ready" || watcher.active !== 1) continue;
+
+    try {
+      budget.remaining -= 1;
+      budget.issued += 1;
+      const [scan] = await enrichVideosWithSponsorBlock([item.video]);
+      const scannedAt = new Date().toISOString();
+      await env.SCOUT_DB.prepare(
+        `UPDATE outreach_watcher_videos
+        SET sponsorblock_has_sponsor = ?,
+          sponsorblock_checked_at = ?,
+          last_seen_at = ?
+        WHERE watcher_id = ?
+          AND video_id = ?`,
+      )
+        .bind(
+          scan.sponsorblock_has_sponsor,
+          scannedAt,
+          scannedAt,
+          watcher.id,
+          item.video.video_id,
+        )
+        .run();
+      await insertVideoScanRows(env, watcher.channel_id, [scan], scannedAt);
+
+      if (scan.error || scan.sponsorblock_has_sponsor === null) {
+        failedWatchers.add(watcher.id);
+        await markSponsorWatcherCheckError(
+          env,
+          watcher,
+          `${item.video.video_id}: ${scan.error ?? "SponsorBlock returned no definitive result."}`,
+          now,
+        );
+      } else if (sponsorWatcherScanShouldFire(
+        item.video,
+        watcher.baseline_cutoff_at,
+        scan.sponsorblock_has_sponsor,
+        now.getTime(),
+      )) {
+        await recordSponsorWatcherTrigger(env, watcher, item.video, now);
+        firedWatchers.add(watcher.id);
+      }
+    } catch (error) {
+      failedWatchers.add(watcher.id);
+      try {
+        await markSponsorWatcherCheckError(env, watcher, errorMessage(error), now);
+      } catch (recordError) {
+        console.error(JSON.stringify({
+          event: "sponsor_watcher_check_failed",
+          watcher_id: watcher.id,
+          video_id: item.video.video_id,
+          error: errorMessage(error),
+          persistence_error: errorMessage(recordError),
+        }));
+      }
+    }
+
+    if (index < scanPlan.length - 1) {
+      await delay(SPONSOR_BASELINE_SCAN_DELAY_MS);
+    }
+  }
+
+  for (const watcher of dueWatchers) {
+    if (firedWatchers.has(watcher.id) || failedWatchers.has(watcher.id)) continue;
+    await markSponsorWatcherCheckSuccess(env, watcher, now);
+  }
+
+  console.log(JSON.stringify({
+    event: "sponsor_watcher_phase_complete",
+    baseline_retries: baselineRetries.length,
+    ready_watchers_checked: dueWatchers.length,
+    sponsorblock_requests: budget.issued,
+    fired_watchers: firedWatchers.size,
+    failed_watchers: failedWatchers.size,
+  }));
+}
+
+async function dueSponsorWatcherBaselineRetries(
+  env: Env,
+  nowIso: string,
+): Promise<OutreachWatcherRow[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT *
+    FROM outreach_watchers
+    WHERE active = 1
+      AND trigger_type = ?
+      AND baseline_state IN ('pending', 'error')
+      AND next_check_at <= ?
+    ORDER BY next_check_at ASC, id ASC
+    LIMIT ?`,
+  )
+    .bind(SPONSOR_APPEARS_TRIGGER, nowIso, SPONSOR_WATCHER_DUE_LIMIT)
+    .all<OutreachWatcherRow>();
+  return results;
+}
+
+async function dueReadySponsorWatchers(
+  env: Env,
+  nowIso: string,
+): Promise<OutreachWatcherRow[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT ow.*
+    FROM outreach_watchers ow
+    WHERE ow.active = 1
+      AND ow.trigger_type = ?
+      AND ow.baseline_state = 'ready'
+      AND ow.next_check_at <= ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM outreach_trigger_events ote
+        WHERE ote.watcher_id = ow.id
+          AND ote.resolved_at IS NULL
+      )
+    ORDER BY ow.next_check_at ASC, ow.id ASC
+    LIMIT ?`,
+  )
+    .bind(SPONSOR_APPEARS_TRIGGER, nowIso, SPONSOR_WATCHER_DUE_LIMIT)
+    .all<OutreachWatcherRow>();
+  return results;
+}
+
+async function upsertSponsorWatcherRssVideos(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  videos: Array<{ video_id: string; video_title: string | null; published_at: string | null }>,
+  checkedAt: string,
+): Promise<void> {
+  if (videos.length === 0) return;
+  await env.SCOUT_DB.batch(videos.map((video) => env.SCOUT_DB.prepare(
+    `INSERT INTO outreach_watcher_videos (
+      watcher_id,
+      video_id,
+      title,
+      published_at,
+      is_baseline,
+      sponsorblock_has_sponsor,
+      sponsorblock_checked_at,
+      first_seen_at,
+      last_seen_at
+    ) VALUES (?, ?, ?, ?, 0, NULL, NULL, ?, ?)
+    ON CONFLICT(watcher_id, video_id) DO UPDATE SET
+      title = COALESCE(excluded.title, outreach_watcher_videos.title),
+      published_at = COALESCE(excluded.published_at, outreach_watcher_videos.published_at),
+      last_seen_at = excluded.last_seen_at`,
+  ).bind(
+    watcher.id,
+    video.video_id,
+    video.video_title,
+    video.published_at,
+    checkedAt,
+    checkedAt,
+  )));
+}
+
+async function currentSponsorWatcherRssRows(
+  env: Env,
+  watcherId: number,
+  checkedAt: string,
+): Promise<SponsorWatcherCheckVideo[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT
+      watcher_id,
+      video_id,
+      title AS video_title,
+      published_at,
+      is_baseline,
+      sponsorblock_has_sponsor,
+      last_seen_at
+    FROM outreach_watcher_videos
+    WHERE watcher_id = ?
+      AND last_seen_at = ?
+    ORDER BY
+      CASE WHEN published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(published_at) DESC,
+      video_id ASC`,
+  )
+    .bind(watcherId, checkedAt)
+    .all<SponsorWatcherCheckVideo>();
+  return results;
+}
+
+async function recordSponsorWatcherTrigger(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  video: SponsorWatcherCheckVideo,
+  now: Date,
+): Promise<void> {
+  if (!sponsorWatcherScanShouldFire(video, watcher.baseline_cutoff_at, 1, now.getTime())) return;
+  const firedAt = now.toISOString();
+  const reason = "SponsorBlock confirmed sponsor segments on a post-attachment upload; brand identity unknown.";
+  await env.SCOUT_DB.batch([
+    env.SCOUT_DB.prepare(
+      `INSERT INTO outreach_trigger_events (
+        watcher_id,
+        trigger_type,
+        fired_at,
+        fire_reason,
+        video_id,
+        video_title,
+        video_published_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      watcher.id,
+      SPONSOR_APPEARS_TRIGGER,
+      firedAt,
+      reason,
+      video.video_id,
+      video.video_title,
+      video.published_at,
+    ),
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_watchers
+      SET fired_at = ?,
+        fire_reason = ?,
+        last_checked_at = ?,
+        last_error = NULL,
+        last_error_at = NULL,
+        next_check_at = ?
+      WHERE id = ?
+        AND active = 1
+        AND baseline_state = 'ready'`,
+    ).bind(firedAt, reason, firedAt, firedAt, watcher.id),
+  ]);
+}
+
+async function markSponsorWatcherCheckError(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  message: string,
+  now: Date,
+): Promise<void> {
+  const errorAt = now.toISOString();
+  const nextCheckAt = new Date(now.getTime() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
+  await env.SCOUT_DB.prepare(
+    `UPDATE outreach_watchers
+    SET last_checked_at = ?,
+      last_error = ?,
+      last_error_at = ?,
+      next_check_at = ?
+    WHERE id = ?
+      AND active = 1`,
+  )
+    .bind(errorAt, message.slice(0, 2000), errorAt, nextCheckAt, watcher.id)
+    .run();
+}
+
+async function markSponsorWatcherCheckSuccess(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  now: Date,
+): Promise<void> {
+  const checkedAt = now.toISOString();
+  const nextCheckAt = new Date(now.getTime() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
+  await env.SCOUT_DB.prepare(
+    `UPDATE outreach_watchers
+    SET last_checked_at = ?,
+      last_error = NULL,
+      last_error_at = NULL,
+      next_check_at = ?
+    WHERE id = ?
+      AND active = 1`,
+  )
+    .bind(checkedAt, nextCheckAt, watcher.id)
+    .run();
 }
 
 async function latestDistinctSponsorWatcherCoverage(
@@ -1584,6 +2006,7 @@ function sponsorWatcherPayload(watcher: OutreachWatcherRow): unknown {
     next_check_at: watcher.next_check_at,
     last_checked_at: watcher.last_checked_at,
     last_error: watcher.last_error,
+    last_error_at: watcher.last_error_at,
     deactivated_at: watcher.deactivated_at,
   };
 }
@@ -4177,6 +4600,7 @@ interface OutreachWatcherRow {
   next_check_at: string;
   last_checked_at: string | null;
   last_error: string | null;
+  last_error_at: string | null;
   fired_at: string | null;
   fire_reason: string | null;
   baseline_state: SponsorWatcherBaselineState;
@@ -4184,6 +4608,11 @@ interface OutreachWatcherRow {
   baseline_newest_video_id: string | null;
   baseline_newest_published_at: string | null;
   deactivated_at: string | null;
+}
+
+interface SponsorWatcherScanBudget {
+  remaining: number;
+  issued: number;
 }
 
 interface SnapshotTargetRow extends SnapshotTargetState {

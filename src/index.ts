@@ -93,6 +93,16 @@ import {
   RosterInputError,
   RosterLookup,
 } from "./lib/roster";
+import {
+  mergeSponsorWatcherBaseline,
+  newestSponsorWatcherBaseline,
+  SPONSOR_APPEARS_TRIGGER,
+  SPONSOR_BASELINE_RETRY_DELAY_MS,
+  SPONSOR_BASELINE_SCAN_DELAY_MS,
+  SPONSOR_BASELINE_VIDEO_LIMIT,
+  SponsorWatcherBaselineState,
+  SponsorWatcherCoverageVideo,
+} from "./lib/outreach-watchers";
 
 type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 type DiscoveredVia = "manual" | "mention" | "collab" | "search";
@@ -143,6 +153,8 @@ export default {
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
       const activeChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/active$/);
       const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
+      const outreachWatcherMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach\/watchers$/);
+      const deactivateOutreachWatcherMatch = url.pathname.match(/^\/api\/outreach\/watchers\/(\d+)\/deactivate$/);
       const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
       const sponsorScanDeepMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan\/deep-history$/);
 
@@ -296,6 +308,24 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return await logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
+      }
+
+      if (outreachWatcherMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await attachSponsorWatcher(
+          decodeURIComponent(outreachWatcherMatch[1]),
+          env,
+        );
+      }
+
+      if (deactivateOutreachWatcherMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await deactivateSponsorWatcher(
+          Number(deactivateOutreachWatcherMatch[1]),
+          env,
+        );
       }
 
       if (sponsorScanMatch && request.method === "POST") {
@@ -1112,6 +1142,7 @@ async function logOutreach(
     note?: unknown;
     next_followup_at?: unknown;
     close_disposition?: unknown;
+    watch_sponsor_appearance?: unknown;
   }>(request);
   if (!VALID_OUTREACH_STATUSES.has(body.outreach_status as OutreachStatus)) {
     return json({ error: "Invalid outreach_status" }, 400);
@@ -1134,6 +1165,19 @@ async function logOutreach(
   }
 
   const nextStatus = body.outreach_status as OutreachStatus;
+  if (
+    body.watch_sponsor_appearance !== undefined
+    && typeof body.watch_sponsor_appearance !== "boolean"
+  ) {
+    return json({ error: "watch_sponsor_appearance must be a boolean" }, 400);
+  }
+  const watchSponsorAppearance = body.watch_sponsor_appearance === true;
+  if (watchSponsorAppearance && nextStatus !== "passed") {
+    return json({ error: "Sponsor appearance watchers can only be attached when closing as passed." }, 400);
+  }
+  if (watchSponsorAppearance && await activeSponsorWatcher(env, channelId)) {
+    return json({ error: "An active sponsor appearance watcher already exists for this channel." }, 409);
+  }
   let stageEvent;
   try {
     stageEvent = planOutreachStageEvent(
@@ -1152,7 +1196,8 @@ async function logOutreach(
       ? "contacted_at"
       : "COALESCE(contacted_at, CURRENT_TIMESTAMP)";
 
-  await env.SCOUT_DB.batch([
+  const attachedAt = new Date().toISOString();
+  const statements = [
     env.SCOUT_DB.prepare(
       `UPDATE channels
       SET outreach_stage = ?,
@@ -1175,12 +1220,372 @@ async function logOutreach(
       stageEvent.toStage,
       stageEvent.logCloseDisposition,
     ),
-  ]);
+  ];
+  if (watchSponsorAppearance) {
+    statements.push(
+      sponsorWatcherInsertStatement(env, {
+        channelId,
+        attachedAt,
+        closeLogSource: "latest",
+      }),
+    );
+  }
+  await env.SCOUT_DB.batch(statements);
+
+  let sponsorWatcher: OutreachWatcherRow | null = null;
+  if (watchSponsorAppearance) {
+    sponsorWatcher = await activeSponsorWatcher(env, channelId);
+    if (!sponsorWatcher) {
+      throw new ResponseError("Sponsor watcher attachment did not persist.", 500);
+    }
+    sponsorWatcher = await completeSponsorWatcherBaseline(env, sponsorWatcher);
+  }
 
   return json({
     channel: await getChannel(env, channelId),
     log: await outreachLog(env, channelId),
+    sponsor_watcher: sponsorWatcher ? sponsorWatcherPayload(sponsorWatcher) : null,
   });
+}
+
+function sponsorWatcherInsertStatement(
+  env: Env,
+  input: {
+    channelId: string;
+    attachedAt: string;
+    closeLogSource: "latest";
+  },
+): D1PreparedStatement {
+  return env.SCOUT_DB.prepare(
+    `INSERT INTO outreach_watchers (
+      channel_id,
+      trigger_type,
+      close_outreach_log_id,
+      active,
+      attached_at,
+      next_check_at,
+      baseline_state,
+      baseline_cutoff_at
+    ) VALUES (
+      ?,
+      ?,
+      (
+        SELECT id
+        FROM outreach_log
+        WHERE channel_id = ?
+          AND event_type = 'closed'
+        ORDER BY id DESC
+        LIMIT 1
+      ),
+      1,
+      ?,
+      ?,
+      'pending',
+      ?
+    )`,
+  ).bind(
+    input.channelId,
+    SPONSOR_APPEARS_TRIGGER,
+    input.channelId,
+    input.attachedAt,
+    input.attachedAt,
+    input.attachedAt,
+  );
+}
+
+async function attachSponsorWatcher(channelId: string, env: Env): Promise<Response> {
+  const channel = await requireMutableChannel(env, channelId);
+  if (outreachSection(channel.outreach_stage, channel.is_active === 1) !== "closed") {
+    return json({ error: "Sponsor appearance watchers can only be attached to closed outreach." }, 400);
+  }
+  if (await activeSponsorWatcher(env, channelId)) {
+    return json({ error: "An active sponsor appearance watcher already exists for this channel." }, 409);
+  }
+
+  const attachedAt = new Date().toISOString();
+  await env.SCOUT_DB.batch([
+    sponsorWatcherInsertStatement(env, {
+      channelId,
+      attachedAt,
+      closeLogSource: "latest",
+    }),
+  ]);
+
+  const watcher = await activeSponsorWatcher(env, channelId);
+  if (!watcher) throw new ResponseError("Sponsor watcher attachment did not persist.", 500);
+  const completed = await completeSponsorWatcherBaseline(env, watcher);
+  return json({ sponsor_watcher: sponsorWatcherPayload(completed) }, 201);
+}
+
+async function deactivateSponsorWatcher(watcherId: number, env: Env): Promise<Response> {
+  if (!Number.isSafeInteger(watcherId) || watcherId < 1) {
+    return json({ error: "Invalid watcher id." }, 400);
+  }
+  const watcher = await env.SCOUT_DB.prepare(
+    "SELECT * FROM outreach_watchers WHERE id = ?",
+  )
+    .bind(watcherId)
+    .first<OutreachWatcherRow>();
+  if (!watcher) return json({ error: "Sponsor watcher not found." }, 404);
+  await requireMutableChannel(env, watcher.channel_id);
+  if (watcher.active !== 1) {
+    return json({ sponsor_watcher: sponsorWatcherPayload(watcher) });
+  }
+
+  const deactivatedAt = new Date().toISOString();
+  await env.SCOUT_DB.prepare(
+    `UPDATE outreach_watchers
+    SET active = 0,
+      deactivated_at = ?,
+      next_check_at = ?
+    WHERE id = ?
+      AND active = 1`,
+  )
+    .bind(deactivatedAt, deactivatedAt, watcherId)
+    .run();
+
+  const updated = await outreachWatcherById(env, watcherId);
+  if (!updated) throw new ResponseError("Sponsor watcher disappeared after deactivation.", 500);
+  return json({ sponsor_watcher: sponsorWatcherPayload(updated) });
+}
+
+async function activeSponsorWatcher(
+  env: Env,
+  channelId: string,
+): Promise<OutreachWatcherRow | null> {
+  return env.SCOUT_DB.prepare(
+    `SELECT *
+    FROM outreach_watchers
+    WHERE channel_id = ?
+      AND trigger_type = ?
+      AND active = 1
+    LIMIT 1`,
+  )
+    .bind(channelId, SPONSOR_APPEARS_TRIGGER)
+    .first<OutreachWatcherRow>();
+}
+
+async function outreachWatcherById(env: Env, watcherId: number): Promise<OutreachWatcherRow | null> {
+  return env.SCOUT_DB.prepare("SELECT * FROM outreach_watchers WHERE id = ?")
+    .bind(watcherId)
+    .first<OutreachWatcherRow>();
+}
+
+async function completeSponsorWatcherBaseline(
+  env: Env,
+  watcher: OutreachWatcherRow,
+): Promise<OutreachWatcherRow> {
+  try {
+    const rssVideos = await fetchYouTubeRssUploads(watcher.channel_id);
+    const scanCoverage = await latestDistinctSponsorWatcherCoverage(
+      env,
+      watcher.channel_id,
+      SPONSOR_BASELINE_VIDEO_LIMIT,
+    );
+    const baseline = mergeSponsorWatcherBaseline(rssVideos, scanCoverage);
+    const seenAt = new Date().toISOString();
+
+    if (baseline.length === 0) {
+      return markSponsorWatcherBaselineError(
+        env,
+        watcher,
+        "No RSS or stored sponsor-scan video IDs were available for the baseline.",
+      );
+    }
+
+    await env.SCOUT_DB.batch(
+      baseline.map((video) => env.SCOUT_DB.prepare(
+        `INSERT INTO outreach_watcher_videos (
+          watcher_id,
+          video_id,
+          title,
+          published_at,
+          is_baseline,
+          sponsorblock_has_sponsor,
+          sponsorblock_checked_at,
+          first_seen_at,
+          last_seen_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(watcher_id, video_id) DO UPDATE SET
+          title = COALESCE(excluded.title, outreach_watcher_videos.title),
+          published_at = COALESCE(excluded.published_at, outreach_watcher_videos.published_at),
+          is_baseline = 1,
+          sponsorblock_has_sponsor = COALESCE(
+            outreach_watcher_videos.sponsorblock_has_sponsor,
+            excluded.sponsorblock_has_sponsor
+          ),
+          sponsorblock_checked_at = COALESCE(
+            outreach_watcher_videos.sponsorblock_checked_at,
+            excluded.sponsorblock_checked_at
+          ),
+          last_seen_at = excluded.last_seen_at`,
+      ).bind(
+        watcher.id,
+        video.video_id,
+        video.video_title,
+        video.published_at,
+        video.sponsorblock_has_sponsor,
+        video.sponsorblock_checked_at,
+        seenAt,
+        seenAt,
+      )),
+    );
+
+    const missingCoverage = baseline.filter(
+      (video) => video.sponsorblock_has_sponsor === null,
+    );
+    const scanFailures: string[] = [];
+    const newScans: SponsorBlockVideoScan[] = [];
+    for (let index = 0; index < missingCoverage.length; index += 1) {
+      const video = missingCoverage[index];
+      const [scan] = await enrichVideosWithSponsorBlock([video]);
+      const scannedAt = new Date().toISOString();
+      newScans.push(scan);
+      await env.SCOUT_DB.prepare(
+        `UPDATE outreach_watcher_videos
+        SET sponsorblock_has_sponsor = ?,
+          sponsorblock_checked_at = ?,
+          last_seen_at = ?
+        WHERE watcher_id = ?
+          AND video_id = ?`,
+      )
+        .bind(
+          scan.sponsorblock_has_sponsor,
+          scannedAt,
+          scannedAt,
+          watcher.id,
+          video.video_id,
+        )
+        .run();
+      if (scan.error || scan.sponsorblock_has_sponsor === null) {
+        scanFailures.push(`${video.video_id}: ${scan.error ?? "SponsorBlock returned no definitive result."}`);
+      }
+      if (index < missingCoverage.length - 1) {
+        await delay(SPONSOR_BASELINE_SCAN_DELAY_MS);
+      }
+    }
+    if (newScans.length > 0) {
+      await insertVideoScanRows(env, watcher.channel_id, newScans, seenAt);
+    }
+
+    const newest = newestSponsorWatcherBaseline(baseline);
+    if (scanFailures.length > 0) {
+      return markSponsorWatcherBaselineError(
+        env,
+        watcher,
+        `SponsorBlock baseline incomplete: ${scanFailures.join("; ").slice(0, 1800)}`,
+        newest,
+      );
+    }
+
+    const nextCheckAt = new Date(Date.now() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
+    await env.SCOUT_DB.prepare(
+      `UPDATE outreach_watchers
+      SET baseline_state = 'ready',
+        baseline_newest_video_id = ?,
+        baseline_newest_published_at = ?,
+        last_checked_at = ?,
+        last_error = NULL,
+        next_check_at = ?
+      WHERE id = ?
+        AND active = 1`,
+    )
+      .bind(
+        newest?.video_id ?? null,
+        newest?.published_at ?? null,
+        seenAt,
+        nextCheckAt,
+        watcher.id,
+      )
+      .run();
+  } catch (error) {
+    return markSponsorWatcherBaselineError(env, watcher, errorMessage(error));
+  }
+
+  return (await outreachWatcherById(env, watcher.id)) ?? watcher;
+}
+
+async function markSponsorWatcherBaselineError(
+  env: Env,
+  watcher: OutreachWatcherRow,
+  message: string,
+  newest: { video_id: string; published_at: string | null } | null = null,
+): Promise<OutreachWatcherRow> {
+  const attemptedAt = new Date().toISOString();
+  const nextCheckAt = new Date(Date.now() + SPONSOR_BASELINE_RETRY_DELAY_MS).toISOString();
+  await env.SCOUT_DB.prepare(
+    `UPDATE outreach_watchers
+    SET baseline_state = 'error',
+      baseline_newest_video_id = COALESCE(?, baseline_newest_video_id),
+      baseline_newest_published_at = COALESCE(?, baseline_newest_published_at),
+      last_checked_at = ?,
+      last_error = ?,
+      next_check_at = ?
+    WHERE id = ?
+      AND active = 1`,
+  )
+    .bind(
+      newest?.video_id ?? null,
+      newest?.published_at ?? null,
+      attemptedAt,
+      message.slice(0, 2000),
+      nextCheckAt,
+      watcher.id,
+    )
+    .run();
+  return (await outreachWatcherById(env, watcher.id)) ?? watcher;
+}
+
+async function latestDistinctSponsorWatcherCoverage(
+  env: Env,
+  channelId: string,
+  limit: number,
+): Promise<SponsorWatcherCoverageVideo[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `WITH latest_per_video AS (
+      SELECT video_id, MAX(scanned_at) AS scanned_at
+      FROM video_scans
+      WHERE channel_id = ?
+      GROUP BY video_id
+    )
+    SELECT
+      vs.video_id,
+      vs.video_title,
+      vs.published_at,
+      vs.sponsorblock_has_sponsor,
+      vs.scanned_at AS sponsorblock_checked_at,
+      vs.error AS sponsorblock_error
+    FROM video_scans vs
+    INNER JOIN latest_per_video latest
+      ON latest.video_id = vs.video_id
+      AND latest.scanned_at = vs.scanned_at
+    WHERE vs.channel_id = ?
+    ORDER BY
+      CASE WHEN vs.published_at IS NULL THEN 1 ELSE 0 END,
+      datetime(vs.published_at) DESC,
+      vs.id DESC
+    LIMIT ?`,
+  )
+    .bind(channelId, channelId, limit)
+    .all<SponsorWatcherCoverageVideo>();
+  return results;
+}
+
+function sponsorWatcherPayload(watcher: OutreachWatcherRow): unknown {
+  return {
+    id: watcher.id,
+    trigger_type: watcher.trigger_type,
+    active: watcher.active === 1,
+    baseline_state: watcher.baseline_state,
+    baseline_cutoff_at: watcher.baseline_cutoff_at,
+    baseline_newest_video_id: watcher.baseline_newest_video_id,
+    baseline_newest_published_at: watcher.baseline_newest_published_at,
+    attached_at: watcher.attached_at,
+    next_check_at: watcher.next_check_at,
+    last_checked_at: watcher.last_checked_at,
+    last_error: watcher.last_error,
+    deactivated_at: watcher.deactivated_at,
+  };
 }
 
 async function sponsorScan(channelId: string, env: Env): Promise<Response> {
@@ -1587,6 +1992,12 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
         FROM outreach_log
         GROUP BY channel_id
       )
+    ),
+    active_watchers AS (
+      SELECT *
+      FROM outreach_watchers
+      WHERE active = 1
+        AND trigger_type = 'sponsor_appears'
     )
     SELECT
       c.*,
@@ -1595,11 +2006,21 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
       sr.sponsor_scan_sponsored,
       sr.sponsor_scan_last_sponsored,
       sr.sponsor_scan_scanned_at,
-      lo.latest_outreach_note
+      lo.latest_outreach_note,
+      ow.id AS sponsor_watcher_id,
+      ow.trigger_type AS sponsor_watcher_trigger_type,
+      ow.active AS sponsor_watcher_active,
+      ow.baseline_state AS sponsor_watcher_baseline_state,
+      ow.baseline_cutoff_at AS sponsor_watcher_baseline_cutoff_at,
+      ow.attached_at AS sponsor_watcher_attached_at,
+      ow.next_check_at AS sponsor_watcher_next_check_at,
+      ow.last_checked_at AS sponsor_watcher_last_checked_at,
+      ow.last_error AS sponsor_watcher_last_error
     FROM channels c
     LEFT JOIN channels s ON c.source_channel_id = s.channel_id
     LEFT JOIN sponsor_rollups sr ON sr.channel_id = c.channel_id
     LEFT JOIN latest_outreach lo ON lo.channel_id = c.channel_id
+    LEFT JOIN active_watchers ow ON ow.channel_id = c.channel_id
     WHERE ((? = 1 AND c.score IS NULL) OR c.score >= ?)
       AND c.kind IN (${kindPlaceholders})
       AND ${stageClause.sql}
@@ -3735,6 +4156,34 @@ interface ChannelSummaryRow extends ChannelRow {
   sponsor_scan_last_sponsored?: string | null;
   sponsor_scan_scanned_at?: string | null;
   latest_outreach_note?: string | null;
+  sponsor_watcher_id?: number | null;
+  sponsor_watcher_trigger_type?: string | null;
+  sponsor_watcher_active?: number | null;
+  sponsor_watcher_baseline_state?: SponsorWatcherBaselineState | null;
+  sponsor_watcher_baseline_cutoff_at?: string | null;
+  sponsor_watcher_attached_at?: string | null;
+  sponsor_watcher_next_check_at?: string | null;
+  sponsor_watcher_last_checked_at?: string | null;
+  sponsor_watcher_last_error?: string | null;
+}
+
+interface OutreachWatcherRow {
+  id: number;
+  channel_id: string;
+  trigger_type: string;
+  close_outreach_log_id: number | null;
+  active: number;
+  attached_at: string;
+  next_check_at: string;
+  last_checked_at: string | null;
+  last_error: string | null;
+  fired_at: string | null;
+  fire_reason: string | null;
+  baseline_state: SponsorWatcherBaselineState;
+  baseline_cutoff_at: string;
+  baseline_newest_video_id: string | null;
+  baseline_newest_published_at: string | null;
+  deactivated_at: string | null;
 }
 
 interface SnapshotTargetRow extends SnapshotTargetState {
@@ -4399,6 +4848,19 @@ function channelSummary(
     snoozed_from_status: row.snoozed_from_status ?? null,
     woke_at: row.woke_at ?? null,
     latest_outreach_note: row.latest_outreach_note ?? null,
+    sponsor_watcher: row.sponsor_watcher_id
+      ? {
+          id: row.sponsor_watcher_id,
+          trigger_type: row.sponsor_watcher_trigger_type,
+          active: row.sponsor_watcher_active === 1,
+          baseline_state: row.sponsor_watcher_baseline_state,
+          baseline_cutoff_at: row.sponsor_watcher_baseline_cutoff_at,
+          attached_at: row.sponsor_watcher_attached_at,
+          next_check_at: row.sponsor_watcher_next_check_at,
+          last_checked_at: row.sponsor_watcher_last_checked_at,
+          last_error: row.sponsor_watcher_last_error,
+        }
+      : null,
     source_seed_title: row.source_seed_title,
     search_query: row.search_query,
     mention_count: row.mention_count,

@@ -1940,6 +1940,41 @@ a:hover {
   resize: vertical;
 }
 
+.outreach-watcher-opt-in {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-left: 144px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  background: rgba(22, 67, 95, 0.12);
+  color: var(--text-soft);
+  text-transform: none;
+}
+
+.outreach-watcher-opt-in input {
+  margin-top: 2px;
+  accent-color: var(--signal-cyan);
+}
+
+.outreach-watcher-opt-in span {
+  display: grid;
+  gap: 4px;
+}
+
+.outreach-watcher-opt-in strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.outreach-watcher-opt-in small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -3743,6 +3778,10 @@ a:hover {
 
   .outreach-field > span {
     padding-top: 0;
+  }
+
+  .outreach-watcher-opt-in {
+    margin-left: 0;
   }
 
   .dialog-actions {

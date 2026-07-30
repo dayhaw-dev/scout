@@ -4,6 +4,18 @@ export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "pitched
 export type CloseDisposition = "declined" | "no_reply";
 export type DiscoverySource = "mention" | "collab" | "search";
 
+export interface SponsorAppearanceWatcher {
+  id: number;
+  trigger_type: "sponsor_appears";
+  active: boolean;
+  baseline_state: "pending" | "ready" | "error";
+  baseline_cutoff_at: string;
+  attached_at: string;
+  next_check_at: string;
+  last_checked_at: string | null;
+  last_error: string | null;
+}
+
 export interface ContactLink {
   type: string;
   label: string;
@@ -37,6 +49,7 @@ export interface ChannelCardRow {
   snoozed_from_status: "candidate" | "watchlist" | null;
   woke_at: string | null;
   latest_outreach_note: string | null;
+  sponsor_watcher: SponsorAppearanceWatcher | null;
   source_seed_title: string | null;
   search_query: string | null;
   mention_count: number;
@@ -445,13 +458,27 @@ export class ScoutApi {
     });
   }
 
-  logOutreach(channelId: string, body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null; close_disposition: CloseDisposition | null }) {
-    return this.request<{ channel: RawChannelRow; log: Array<{ id: number; channel_id: string; created_at: string; note: string; event_type: string; from_stage: OutreachStatus | null; to_stage: OutreachStatus | null; close_disposition: CloseDisposition | null }> }>(
+  logOutreach(channelId: string, body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null; close_disposition: CloseDisposition | null; watch_sponsor_appearance: boolean }) {
+    return this.request<{ channel: RawChannelRow; log: Array<{ id: number; channel_id: string; created_at: string; note: string; event_type: string; from_stage: OutreachStatus | null; to_stage: OutreachStatus | null; close_disposition: CloseDisposition | null }>; sponsor_watcher: SponsorAppearanceWatcher | null }>(
       `/api/channels/${encodeURIComponent(channelId)}/outreach`,
       {
         method: "POST",
         body: JSON.stringify(body),
       },
+    );
+  }
+
+  attachSponsorWatcher(channelId: string) {
+    return this.request<{ sponsor_watcher: SponsorAppearanceWatcher }>(
+      `/api/channels/${encodeURIComponent(channelId)}/outreach/watchers`,
+      { method: "POST", body: JSON.stringify({ trigger_type: "sponsor_appears" }) },
+    );
+  }
+
+  stopSponsorWatcher(watcherId: number) {
+    return this.request<{ sponsor_watcher: SponsorAppearanceWatcher }>(
+      `/api/outreach/watchers/${watcherId}/deactivate`,
+      { method: "POST", body: JSON.stringify({}) },
     );
   }
 

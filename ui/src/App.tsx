@@ -63,6 +63,7 @@ type OutreachLogInput = {
   note: string;
   next_followup_at: string | null;
   close_disposition: CloseDisposition | null;
+  watch_sponsor_appearance: boolean;
 };
 
 const SESSION_KEY = "scout_admin_key";
@@ -1304,6 +1305,7 @@ function OutreachView({
   } | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [rosterBusy, setRosterBusy] = useState(false);
+  const [watcherBusyId, setWatcherBusyId] = useState<string | null>(null);
   const closedCounts = useMemo(() => ({
     signed: closed.filter((channel) => channel.outreach_status === "signed").length,
     passed: closed.filter((channel) => channel.outreach_status === "passed").length,
@@ -1485,6 +1487,43 @@ function OutreachView({
     }
   }
 
+  async function attachSponsorWatcher(channel: ChannelCardRow) {
+    if (watcherBusyId) return;
+    const confirmed = window.confirm(
+      "Attach the sponsor watcher now? Its baseline starts today: videos published between the original close and attachment are baseline and cannot trigger re-engagement.",
+    );
+    if (!confirmed) return;
+    setWatcherBusyId(channel.channel_id);
+    try {
+      const result = await api.attachSponsorWatcher(channel.channel_id);
+      await load();
+      const state = result.sponsor_watcher.baseline_state;
+      onToast({
+        message: state === "ready"
+          ? `${channel.title ?? "Channel"} sponsor baseline is ready.`
+          : `${channel.title ?? "Channel"} watcher saved; baseline ${state}. It will retry on a later watcher pass.`,
+      });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setWatcherBusyId(null);
+    }
+  }
+
+  async function stopSponsorWatcher(channel: ChannelCardRow) {
+    if (!channel.sponsor_watcher || watcherBusyId) return;
+    setWatcherBusyId(channel.channel_id);
+    try {
+      await api.stopSponsorWatcher(channel.sponsor_watcher.id);
+      await load();
+      onToast({ message: `${channel.title ?? "Channel"} sponsor watcher stopped; history retained.` });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setWatcherBusyId(null);
+    }
+  }
+
   return (
     <section className="view">
       <div className="stage-heading clipped">
@@ -1593,6 +1632,9 @@ function OutreachView({
                 onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
                 onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
                 onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
+                onWatchSponsor={!channel.seed_locked ? () => void attachSponsorWatcher(channel) : undefined}
+                onStopWatchSponsor={!channel.seed_locked && channel.sponsor_watcher ? () => void stopSponsorWatcher(channel) : undefined}
+                watcherBusy={watcherBusyId === channel.channel_id}
                 sponsorScan={sponsorScans[channel.channel_id]}
                 sponsorScanLoading={scanningSponsorId === channel.channel_id}
                 tab="outreach"
@@ -2430,6 +2472,9 @@ function ChannelCard({
   onEnrich,
   onLogOutreach,
   onSponsorScan,
+  onWatchSponsor,
+  onStopWatchSponsor,
+  watcherBusy = false,
   sponsorScan,
   sponsorScanLoading = false,
   tab,
@@ -2453,6 +2498,9 @@ function ChannelCard({
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
+  onWatchSponsor?: () => void;
+  onStopWatchSponsor?: () => void;
+  watcherBusy?: boolean;
   sponsorScan?: SponsorScanSummary;
   sponsorScanLoading?: boolean;
   tab?: Tab;
@@ -2478,6 +2526,9 @@ function ChannelCard({
     onEnrich,
     onLogOutreach,
     onSponsorScan,
+    onWatchSponsor,
+    onStopWatchSponsor,
+    watcherBusy,
     sponsorScanLoading,
     enrichFreshDays: enrichmentFreshDays(channel),
   });
@@ -2828,6 +2879,9 @@ function cardActions({
   onEnrich,
   onLogOutreach,
   onSponsorScan,
+  onWatchSponsor,
+  onStopWatchSponsor,
+  watcherBusy,
   sponsorScanLoading,
   enrichFreshDays,
 }: {
@@ -2847,6 +2901,9 @@ function cardActions({
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
+  onWatchSponsor?: () => void;
+  onStopWatchSponsor?: () => void;
+  watcherBusy?: boolean;
   sponsorScanLoading?: boolean;
   enrichFreshDays?: number | null;
 }): CardAction[] {
@@ -2937,6 +2994,23 @@ function cardActions({
       className: sponsorScanLoading ? "active-action" : undefined,
       title: "Scan recent videos for SponsorBlock signals",
       disabled: sponsorScanLoading,
+    });
+  }
+  if (onStopWatchSponsor) {
+    actions.push({
+      key: "stop-sponsor-watcher",
+      label: watcherBusy ? "Stopping watcher..." : "Stop watching sponsors",
+      onClick: onStopWatchSponsor,
+      title: "Deactivate the watcher without deleting its baseline or history",
+      disabled: watcherBusy,
+    });
+  } else if (onWatchSponsor) {
+    actions.push({
+      key: "watch-sponsors",
+      label: watcherBusy ? "Building baseline..." : "Watch for sponsor appearance",
+      onClick: onWatchSponsor,
+      title: "Baseline begins at attachment; earlier videos are baseline and cannot trigger",
+      disabled: watcherBusy,
     });
   }
 
@@ -3093,6 +3167,7 @@ function OutreachDialog({
   const [closeDisposition, setCloseDisposition] = useState<CloseDisposition | "">(
     channel.outreach_status === "passed" ? channel.close_disposition ?? "" : "",
   );
+  const [watchSponsorAppearance, setWatchSponsorAppearance] = useState(false);
   const closed = outreachStatus === "signed" || outreachStatus === "passed";
   const updating =
     channel.outreach_status === "sent" ||
@@ -3105,7 +3180,10 @@ function OutreachDialog({
   }, [closed]);
 
   useEffect(() => {
-    if (outreachStatus !== "passed") setCloseDisposition("");
+    if (outreachStatus !== "passed") {
+      setCloseDisposition("");
+      setWatchSponsorAppearance(false);
+    }
   }, [outreachStatus]);
 
   return (
@@ -3122,6 +3200,7 @@ function OutreachDialog({
             note,
             next_followup_at: nextFollowup || null,
             close_disposition: outreachStatus === "passed" ? closeDisposition || null : null,
+            watch_sponsor_appearance: outreachStatus === "passed" && watchSponsorAppearance,
           });
         }}
       >
@@ -3140,19 +3219,34 @@ function OutreachDialog({
           </select>
         </label>
         {outreachStatus === "passed" && (
-          <label className="outreach-field">
-            <span>Why closed?</span>
-            <select
-              className="outreach-control"
-              value={closeDisposition}
-              onChange={(event) => setCloseDisposition(event.target.value as CloseDisposition | "")}
-              required
-            >
-              <option value="" disabled>Select a reason</option>
-              <option value="declined">DECLINED</option>
-              <option value="no_reply">NO REPLY / WENT DARK</option>
-            </select>
-          </label>
+          <>
+            <label className="outreach-field">
+              <span>Why closed?</span>
+              <select
+                className="outreach-control"
+                value={closeDisposition}
+                onChange={(event) => setCloseDisposition(event.target.value as CloseDisposition | "")}
+                required
+              >
+                <option value="" disabled>Select a reason</option>
+                <option value="declined">DECLINED</option>
+                <option value="no_reply">NO REPLY / WENT DARK</option>
+              </select>
+            </label>
+            <label className="outreach-watcher-opt-in">
+              <input
+                type="checkbox"
+                checked={watchSponsorAppearance}
+                onChange={(event) => setWatchSponsorAppearance(event.target.checked)}
+              />
+              <span>
+                <strong>Watch for sponsor appearance</strong>
+                <small>
+                  Optional. The baseline starts when this is attached; videos already published by then are baseline and cannot trigger re-engagement.
+                </small>
+              </span>
+            </label>
+          </>
         )}
         <label className="outreach-field">
           <span>Note</span>

@@ -65,6 +65,7 @@ type OutreachLogInput = {
   close_disposition: CloseDisposition | null;
   watch_sponsor_appearance: boolean;
 };
+type RemoveOutreachInput = { note: string; confirmed: boolean };
 
 const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
@@ -1294,6 +1295,8 @@ function OutreachView({
   const [closed, setClosed] = useState<ChannelCardRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [outreachChannel, setOutreachChannel] = useState<ChannelCardRow | null>(null);
+  const [removeOutreachChannel, setRemoveOutreachChannel] = useState<ChannelCardRow | null>(null);
+  const [removingOutreachId, setRemovingOutreachId] = useState<string | null>(null);
   const [sponsorScans, setSponsorScans] = useState<SponsorScanState>({});
   const [sponsorScanTarget, setSponsorScanTarget] = useState<SponsorScanTarget | null>(null);
   const [scanningSponsorId, setScanningSponsorId] = useState<string | null>(null);
@@ -1510,6 +1513,31 @@ function OutreachView({
     }
   }
 
+  async function handleRemoveFromOutreach(body: RemoveOutreachInput) {
+    if (!removeOutreachChannel || removingOutreachId) return;
+    const channel = removeOutreachChannel;
+    setRemovingOutreachId(channel.channel_id);
+    try {
+      const result = await api.removeFromOutreach(channel.channel_id, body.note, body.confirmed);
+      setRemoveOutreachChannel(null);
+      await load();
+      onChanged();
+      const watcherNote = result.sponsor_watchers_deactivated > 0
+        ? ` ${result.sponsor_watchers_deactivated} sponsor watcher stopped.`
+        : "";
+      const triggerNote = result.trigger_events_dismissed > 0
+        ? ` ${result.trigger_events_dismissed} open trigger dismissed.`
+        : "";
+      onToast({
+        message: `${channel.title ?? "Channel"} removed from Outreach; seed and pipeline status preserved.${watcherNote}${triggerNote}`,
+      });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setRemovingOutreachId(null);
+    }
+  }
+
   async function stopSponsorWatcher(channel: ChannelCardRow) {
     if (!channel.sponsor_watcher || watcherBusyId) return;
     setWatcherBusyId(channel.channel_id);
@@ -1575,6 +1603,7 @@ function OutreachView({
               stale={isStaleOutreach(channel)}
               onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
               onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+              onRemoveFromOutreach={!channel.seed_locked ? () => setRemoveOutreachChannel(channel) : undefined}
               onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
               onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
               onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
@@ -1601,6 +1630,7 @@ function OutreachView({
               stale={isStaleOutreach(channel)}
               onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
               onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+              onRemoveFromOutreach={!channel.seed_locked ? () => setRemoveOutreachChannel(channel) : undefined}
               onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
               onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
               onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
@@ -1628,6 +1658,7 @@ function OutreachView({
                 channel={channel}
                 onLogOutreach={!channel.seed_locked ? () => setOutreachChannel(channel) : undefined}
                 onToggleActive={!channel.seed_locked ? () => void toggleActive(channel) : undefined}
+                onRemoveFromOutreach={!channel.seed_locked ? () => setRemoveOutreachChannel(channel) : undefined}
                 onToggleSeed={!channel.seed_locked && channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
                 onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
                 onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
@@ -1648,6 +1679,16 @@ function OutreachView({
           channel={outreachChannel}
           onClose={() => setOutreachChannel(null)}
           onSubmit={(body) => void handleOutreachLog(body)}
+        />
+      )}
+      {removeOutreachChannel && (
+        <RemoveFromOutreachDialog
+          channel={removeOutreachChannel}
+          busy={removingOutreachId === removeOutreachChannel.channel_id}
+          onClose={() => {
+            if (!removingOutreachId) setRemoveOutreachChannel(null);
+          }}
+          onSubmit={(body) => void handleRemoveFromOutreach(body)}
         />
       )}
       {sponsorScanTarget && (
@@ -2469,6 +2510,7 @@ function ChannelCard({
   onToggleKind,
   onToggleEmailConfirmed,
   onToggleActive,
+  onRemoveFromOutreach,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -2495,6 +2537,7 @@ function ChannelCard({
   onToggleKind?: () => void;
   onToggleEmailConfirmed?: () => void;
   onToggleActive?: () => void;
+  onRemoveFromOutreach?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -2523,6 +2566,7 @@ function ChannelCard({
     onToggleKind,
     onToggleEmailConfirmed,
     onToggleActive,
+    onRemoveFromOutreach,
     onEnrich,
     onLogOutreach,
     onSponsorScan,
@@ -2876,6 +2920,7 @@ function cardActions({
   onToggleKind,
   onToggleEmailConfirmed,
   onToggleActive,
+  onRemoveFromOutreach,
   onEnrich,
   onLogOutreach,
   onSponsorScan,
@@ -2898,6 +2943,7 @@ function cardActions({
   onToggleKind?: () => void;
   onToggleEmailConfirmed?: () => void;
   onToggleActive?: () => void;
+  onRemoveFromOutreach?: () => void;
   onEnrich?: () => void;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
@@ -2994,6 +3040,14 @@ function cardActions({
       className: sponsorScanLoading ? "active-action" : undefined,
       title: "Scan recent videos for SponsorBlock signals",
       disabled: sponsorScanLoading,
+    });
+  }
+  if (onRemoveFromOutreach && tab === "outreach") {
+    actions.push({
+      key: "remove-outreach",
+      label: "Remove from Outreach",
+      onClick: onRemoveFromOutreach,
+      title: "Clear funnel and ACTIVE state; stop sponsor watchers and dismiss open triggers",
     });
   }
   if (onStopWatchSponsor) {
@@ -4625,6 +4679,79 @@ function freshnessPendingSortValue(seed: RawChannelRow): number {
   if (freshness.status !== "ok") return -1;
   return freshness.pending_classification_count
     + freshness.pending_live_classification_count;
+}
+
+function RemoveFromOutreachDialog({
+  channel,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  channel: ChannelCardRow;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (body: RemoveOutreachInput) => void;
+}) {
+  const [note, setNote] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="dialog clipped outreach-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Remove from Outreach"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!note.trim() || !confirmed || busy) return;
+          onSubmit({ note: note.trim(), confirmed });
+        }}
+      >
+        <div className="dialog-header">
+          <div>
+            <h2>Remove from Outreach</h2>
+            <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+          </div>
+        </div>
+        <p className="dialog-hint">
+          This clears the funnel stage, ACTIVE state, pass reason, and next follow-up. Seed and pipeline status stay unchanged.
+          Any active sponsor watcher will stop, and any unresolved trigger will be dismissed with this note.
+        </p>
+        <label className="outreach-field">
+          <span>Required note</span>
+          <textarea
+            className="outreach-control"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Why this creator no longer belongs in Outreach"
+            required
+            disabled={busy}
+            autoFocus
+          />
+        </label>
+        <label className="outreach-watcher-opt-in">
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => setConfirmed(event.target.checked)}
+            required
+            disabled={busy}
+          />
+          <span>
+            <strong>Confirm removal from Outreach</strong>
+            <small>Outreach history is retained; watcher and trigger history are not deleted.</small>
+          </span>
+        </label>
+        <div className="dialog-actions">
+          <button className="primary" type="submit" disabled={!note.trim() || !confirmed || busy}>
+            {busy ? "Removing..." : "Remove from Outreach"}
+          </button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function freshnessUploadTime(seed: RawChannelRow): number {

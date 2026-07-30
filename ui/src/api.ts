@@ -468,6 +468,18 @@ export class ScoutApi {
     );
   }
 
+  removeFromOutreach(channelId: string, note: string, confirmed: boolean) {
+    return this.request<{
+      channel: RawChannelRow;
+      log: Array<{ id: number; channel_id: string; created_at: string; note: string; event_type: string; from_stage: OutreachStatus | null; to_stage: OutreachStatus | null; close_disposition: CloseDisposition | null }>;
+      sponsor_watchers_deactivated: number;
+      trigger_events_dismissed: number;
+    }>(`/api/channels/${encodeURIComponent(channelId)}/outreach/remove`, {
+      method: "POST",
+      body: JSON.stringify({ note, confirmed }),
+    });
+  }
+
   attachSponsorWatcher(channelId: string) {
     return this.request<{ sponsor_watcher: SponsorAppearanceWatcher }>(
       `/api/channels/${encodeURIComponent(channelId)}/outreach/watchers`,

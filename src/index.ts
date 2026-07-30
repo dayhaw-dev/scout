@@ -87,6 +87,7 @@ import {
   outreachSection,
   outreachSqlList,
   OutreachStatus,
+  validateOutreachEventType,
 } from "./lib/outreach";
 import {
   normalizeRosterInput,
@@ -164,6 +165,7 @@ export default {
       const patchChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/);
       const activeChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/active$/);
       const outreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach$/);
+      const removeOutreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach\/remove$/);
       const outreachWatcherMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach\/watchers$/);
       const deactivateOutreachWatcherMatch = url.pathname.match(/^\/api\/outreach\/watchers\/(\d+)\/deactivate$/);
       const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
@@ -319,6 +321,16 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return await logOutreach(decodeURIComponent(outreachChannelMatch[1]), request, env);
+      }
+
+      if (removeOutreachChannelMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await removeFromOutreach(
+          decodeURIComponent(removeOutreachChannelMatch[1]),
+          request,
+          env,
+        );
       }
 
       if (outreachWatcherMatch && request.method === "POST") {
@@ -1271,6 +1283,70 @@ async function logOutreach(
     channel: await getChannel(env, channelId),
     log: await outreachLog(env, channelId),
     sponsor_watcher: sponsorWatcher ? sponsorWatcherPayload(sponsorWatcher) : null,
+  });
+}
+
+async function removeFromOutreach(
+  channelId: string,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const existing = await requireMutableChannel(env, channelId);
+  const body = await parseJson<{ confirmed?: unknown; note?: unknown }>(request);
+  if (body.confirmed !== true) {
+    return json({ error: "Remove from Outreach requires confirmation." }, 400);
+  }
+  if (typeof body.note !== "string" || body.note.trim().length === 0) {
+    return json({ error: "note is required" }, 400);
+  }
+  if (existing.outreach_stage === "none" && existing.is_active !== 1) {
+    return json({ error: "Channel is not currently in Outreach." }, 409);
+  }
+
+  const removedAt = new Date().toISOString();
+  const note = body.note.trim().slice(0, 2000);
+  const triggerResolution = `dismissed — ${note}`.slice(0, 2000);
+  const eventType = validateOutreachEventType("stage_changed");
+  const results = await env.SCOUT_DB.batch([
+    env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET outreach_stage = 'none',
+        is_active = 0,
+        close_disposition = NULL,
+        next_followup_at = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(channelId),
+    env.SCOUT_DB.prepare(
+      `INSERT INTO outreach_log (
+        channel_id, note, event_type, from_stage, to_stage, close_disposition
+      ) VALUES (?, ?, ?, ?, 'none', NULL)`,
+    ).bind(channelId, note, eventType, existing.outreach_stage),
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_watchers
+      SET active = 0,
+        deactivated_at = ?
+      WHERE channel_id = ?
+        AND active = 1`,
+    ).bind(removedAt, channelId),
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_trigger_events
+      SET resolved_at = ?,
+        resolution = ?
+      WHERE resolved_at IS NULL
+        AND watcher_id IN (
+          SELECT id
+          FROM outreach_watchers
+          WHERE channel_id = ?
+        )`,
+    ).bind(removedAt, triggerResolution, channelId),
+  ]);
+
+  return json({
+    channel: await getChannel(env, channelId),
+    log: await outreachLog(env, channelId),
+    sponsor_watchers_deactivated: Number(results[2]?.meta.changes ?? 0),
+    trigger_events_dismissed: Number(results[3]?.meta.changes ?? 0),
   });
 }
 

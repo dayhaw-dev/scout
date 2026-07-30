@@ -12,6 +12,7 @@ import {
   ExpandAllSeedsSummary,
   MineQueriesPlan,
   MineQueriesTarget,
+  OutreachTriggerEvent,
   OutreachStatus,
   RawChannelRow,
   ScoutApi,
@@ -31,6 +32,12 @@ import {
   seedLiveGardenCooldownMs,
   seedOrePresentation,
 } from "./seed-freshness";
+import {
+  SPONSOR_APPEARED_LABEL,
+  SPONSOR_CONFIRMED_COPY,
+  SPONSOR_TRIGGER_CARD_NOTE,
+  sponsorWatcherStateLabel,
+} from "./outreach-trigger-presentation";
 
 type StageTab = "pool" | "shortlist" | "watchlist" | "snoozed" | "rejected";
 type Tab = StageTab | "outreach" | "seeds" | "brands";
@@ -66,6 +73,12 @@ type OutreachLogInput = {
   watch_sponsor_appearance: boolean;
 };
 type RemoveOutreachInput = { note: string; confirmed: boolean };
+type ReopenTriggerInput = {
+  outreach_status: "sent" | "replied" | "in_talks" | "pitched";
+  note: string;
+  next_followup_at: string | null;
+  confirmed: boolean;
+};
 
 const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
@@ -77,6 +90,7 @@ const TAB_SHELVES: Array<{ label: string; tone: string; tabs: Tab[] }> = [
   { label: "Library", tone: "library", tabs: ["seeds", "brands", "rejected"] },
 ];
 const OUTREACH_OPTIONS: OutreachStatus[] = ["sent", "replied", "in_talks", "pitched", "signed", "passed"];
+const LIVE_OUTREACH_OPTIONS: ReopenTriggerInput["outreach_status"][] = ["sent", "replied", "in_talks", "pitched"];
 
 export function App() {
   const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SESSION_KEY));
@@ -1290,6 +1304,7 @@ function OutreachView({
   onToast: (toast: ToastState) => void;
   onChanged: () => void;
 }) {
+  const [triggered, setTriggered] = useState<ChannelCardRow[]>([]);
   const [working, setWorking] = useState<ChannelCardRow[]>([]);
   const [live, setLive] = useState<ChannelCardRow[]>([]);
   const [closed, setClosed] = useState<ChannelCardRow[]>([]);
@@ -1309,6 +1324,9 @@ function OutreachView({
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [rosterBusy, setRosterBusy] = useState(false);
   const [watcherBusyId, setWatcherBusyId] = useState<string | null>(null);
+  const [reopenTriggerChannel, setReopenTriggerChannel] = useState<ChannelCardRow | null>(null);
+  const [dismissTriggerChannel, setDismissTriggerChannel] = useState<ChannelCardRow | null>(null);
+  const [triggerBusyId, setTriggerBusyId] = useState<number | null>(null);
   const closedCounts = useMemo(() => ({
     signed: closed.filter((channel) => channel.outreach_status === "signed").length,
     passed: closed.filter((channel) => channel.outreach_status === "passed").length,
@@ -1318,6 +1336,7 @@ function OutreachView({
     setLoading(true);
     try {
       const result = await api.getOutreach();
+      setTriggered(result.triggered);
       setWorking(result.working);
       setLive(result.live);
       setClosed(result.closed);
@@ -1552,8 +1571,64 @@ function OutreachView({
     }
   }
 
+  async function handleReopenTrigger(body: ReopenTriggerInput) {
+    const trigger = reopenTriggerChannel?.outreach_trigger;
+    if (!trigger || triggerBusyId) return;
+    setTriggerBusyId(trigger.id);
+    try {
+      await api.reopenOutreachTrigger(trigger.id, body);
+      const label = reopenTriggerChannel.title ?? "Channel";
+      setReopenTriggerChannel(null);
+      await load();
+      onChanged();
+      onToast({ message: `${label} re-opened into ${outreachLabel(body.outreach_status)}; sponsor watcher stopped.` });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setTriggerBusyId(null);
+    }
+  }
+
+  async function handleDismissTrigger() {
+    const trigger = dismissTriggerChannel?.outreach_trigger;
+    if (!trigger || triggerBusyId) return;
+    setTriggerBusyId(trigger.id);
+    try {
+      await api.dismissOutreachTrigger(trigger.id, true);
+      const label = dismissTriggerChannel.title ?? "Channel";
+      setDismissTriggerChannel(null);
+      await load();
+      onChanged();
+      onToast({ message: `${label} trigger dismissed; sponsor watcher resumed for genuinely later uploads.` });
+    } catch (error) {
+      onError(error);
+    } finally {
+      setTriggerBusyId(null);
+    }
+  }
+
   return (
     <section className="view">
+      {triggered.length > 0 && (
+        <section className="triggered-outreach-section" aria-label="Triggered outreach">
+          <div className="stage-heading clipped triggered-heading">
+            <strong>Triggered</strong>
+            <span>Sponsor evidence appeared after close. Review before changing the funnel.</span>
+          </div>
+          <div className="card-grid channel-card-grid">
+            {triggered.map((channel) => (
+              <ChannelCard
+                key={channel.channel_id}
+                channel={channel}
+                triggered
+                onReopenTrigger={!channel.seed_locked ? () => setReopenTriggerChannel(channel) : undefined}
+                onDismissTrigger={!channel.seed_locked ? () => setDismissTriggerChannel(channel) : undefined}
+                tab="outreach"
+              />
+            ))}
+          </div>
+        </section>
+      )}
       <div className="stage-heading clipped">
         <strong>Active / working with</strong>
         <span>Roster + live brand relationships — independent of funnel status. Funnel position rides as a chip.</span>
@@ -1689,6 +1764,26 @@ function OutreachView({
             if (!removingOutreachId) setRemoveOutreachChannel(null);
           }}
           onSubmit={(body) => void handleRemoveFromOutreach(body)}
+        />
+      )}
+      {reopenTriggerChannel?.outreach_trigger && (
+        <ReopenTriggerDialog
+          channel={reopenTriggerChannel}
+          busy={triggerBusyId === reopenTriggerChannel.outreach_trigger.id}
+          onClose={() => {
+            if (!triggerBusyId) setReopenTriggerChannel(null);
+          }}
+          onSubmit={(body) => void handleReopenTrigger(body)}
+        />
+      )}
+      {dismissTriggerChannel?.outreach_trigger && (
+        <DismissTriggerDialog
+          channel={dismissTriggerChannel}
+          busy={triggerBusyId === dismissTriggerChannel.outreach_trigger.id}
+          onClose={() => {
+            if (!triggerBusyId) setDismissTriggerChannel(null);
+          }}
+          onConfirm={() => void handleDismissTrigger()}
         />
       )}
       {sponsorScanTarget && (
@@ -2516,6 +2611,8 @@ function ChannelCard({
   onSponsorScan,
   onWatchSponsor,
   onStopWatchSponsor,
+  onReopenTrigger,
+  onDismissTrigger,
   watcherBusy = false,
   sponsorScan,
   sponsorScanLoading = false,
@@ -2523,6 +2620,7 @@ function ChannelCard({
   highlighted = false,
   newArrival = false,
   stale = false,
+  triggered = false,
 }: {
   channel: ChannelCardRow;
   onShortlist?: () => void;
@@ -2543,6 +2641,8 @@ function ChannelCard({
   onSponsorScan?: () => void;
   onWatchSponsor?: () => void;
   onStopWatchSponsor?: () => void;
+  onReopenTrigger?: () => void;
+  onDismissTrigger?: () => void;
   watcherBusy?: boolean;
   sponsorScan?: SponsorScanSummary;
   sponsorScanLoading?: boolean;
@@ -2550,6 +2650,7 @@ function ChannelCard({
   highlighted?: boolean;
   newArrival?: boolean;
   stale?: boolean;
+  triggered?: boolean;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actions = cardActions({
@@ -2572,6 +2673,8 @@ function ChannelCard({
     onSponsorScan,
     onWatchSponsor,
     onStopWatchSponsor,
+    onReopenTrigger,
+    onDismissTrigger,
     watcherBusy,
     sponsorScanLoading,
     enrichFreshDays: enrichmentFreshDays(channel),
@@ -2629,6 +2732,15 @@ function ChannelCard({
         {newArrival && <span className="chip badge-alert new-chip">NEW</span>}
         {channel.woke_at && channel.status === "candidate" && <span className="chip badge-alert woke-chip">WOKE</span>}
         {channel.is_active && <span className="chip badge-attribute active-relationship-chip">ACTIVE</span>}
+        {triggered && <span className="chip badge-alert sponsor-trigger-chip">{SPONSOR_APPEARED_LABEL}</span>}
+        {!triggered && tab === "outreach" && channel.sponsor_watcher && (
+          <span
+            className={`chip badge-attribute sponsor-watcher-chip watcher-${channel.sponsor_watcher.baseline_state}`}
+            title={channel.sponsor_watcher.last_error ?? undefined}
+          >
+            {sponsorWatcherStateLabel(channel.sponsor_watcher.baseline_state)}
+          </span>
+        )}
         <GrowthChipItems row={channel} />
       </div>
       {provenanceItems.length > 0 && (
@@ -2646,6 +2758,9 @@ function ChannelCard({
             </span>
           )}
         </div>
+      )}
+      {triggered && channel.outreach_trigger && (
+        <SponsorTriggerContext trigger={channel.outreach_trigger} />
       )}
       <Sparkline points={channel.snapshots ?? []} />
       {hasFooter && (
@@ -2926,6 +3041,8 @@ function cardActions({
   onSponsorScan,
   onWatchSponsor,
   onStopWatchSponsor,
+  onReopenTrigger,
+  onDismissTrigger,
   watcherBusy,
   sponsorScanLoading,
   enrichFreshDays,
@@ -2949,11 +3066,30 @@ function cardActions({
   onSponsorScan?: () => void;
   onWatchSponsor?: () => void;
   onStopWatchSponsor?: () => void;
+  onReopenTrigger?: () => void;
+  onDismissTrigger?: () => void;
   watcherBusy?: boolean;
   sponsorScanLoading?: boolean;
   enrichFreshDays?: number | null;
 }): CardAction[] {
   const actions: CardAction[] = [];
+  if (onReopenTrigger) {
+    actions.push({
+      key: "reopen-trigger",
+      label: "Re-open into outreach",
+      onClick: onReopenTrigger,
+      primary: true,
+    });
+  }
+  if (onDismissTrigger) {
+    actions.push({
+      key: "dismiss-trigger",
+      label: "Dismiss trigger",
+      onClick: onDismissTrigger,
+      visibleSecondary: true,
+      className: "trigger-dismiss-action",
+    });
+  }
   if (onShortlist) {
     actions.push({
       key: "shortlist",
@@ -3202,6 +3338,171 @@ function enrichmentFreshDays(channel: { enriched_at?: string | null }): number |
 
 function hasMetricValue(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function SponsorTriggerContext({ trigger }: { trigger: OutreachTriggerEvent }) {
+  return (
+    <div className="sponsor-trigger-context">
+      <strong>{SPONSOR_CONFIRMED_COPY}</strong>
+      <div className="sponsor-trigger-video">
+        {trigger.video_id ? (
+          <a
+            href={`https://youtube.com/watch?v=${trigger.video_id}`}
+            target="_blank"
+            rel="noreferrer"
+            title={trigger.video_title ?? trigger.video_id}
+          >
+            {trigger.video_title ?? trigger.video_id}
+          </a>
+        ) : (
+          <span>{trigger.video_title ?? "Triggering upload title unavailable"}</span>
+        )}
+        <time>{trigger.video_published_at ? shortDate(trigger.video_published_at) : "PUBLISH DATE UNKNOWN"}</time>
+      </div>
+      <p>{SPONSOR_TRIGGER_CARD_NOTE}</p>
+      <dl>
+        <div><dt>Triggered</dt><dd>{shortDate(trigger.fired_at)}</dd></div>
+        <div><dt>Closed</dt><dd>{trigger.original_close_at ? shortDate(trigger.original_close_at) : "UNKNOWN"}</dd></div>
+        <div><dt>Close note</dt><dd>{trigger.original_close_note ?? "CLOSE NOTE UNKNOWN"}</dd></div>
+      </dl>
+    </div>
+  );
+}
+
+function ReopenTriggerDialog({
+  channel,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  channel: ChannelCardRow;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (body: ReopenTriggerInput) => void;
+}) {
+  const [outreachStatus, setOutreachStatus] = useState<ReopenTriggerInput["outreach_status"]>("sent");
+  const [note, setNote] = useState("");
+  const [nextFollowup, setNextFollowup] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="dialog clipped outreach-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Re-open triggered outreach"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!confirmed || !note.trim() || busy) return;
+          onSubmit({
+            outreach_status: outreachStatus,
+            note: note.trim(),
+            next_followup_at: nextFollowup || null,
+            confirmed,
+          });
+        }}
+      >
+        <div className="dialog-header">
+          <div>
+            <h2>Re-open into outreach</h2>
+            <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+          </div>
+        </div>
+        <p className="dialog-hint">Choose a live stage. Confirming clears the close disposition, resolves this trigger, and stops its watcher.</p>
+        <label className="outreach-field">
+          <span>Live stage</span>
+          <select
+            className="outreach-control"
+            value={outreachStatus}
+            onChange={(event) => setOutreachStatus(event.target.value as ReopenTriggerInput["outreach_status"])}
+            disabled={busy}
+          >
+            {LIVE_OUTREACH_OPTIONS.map((option) => (
+              <option key={option} value={option}>{outreachLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="outreach-field">
+          <span>Note</span>
+          <textarea
+            className="outreach-control"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Why this creator is re-entering live outreach..."
+            required
+            disabled={busy}
+          />
+        </label>
+        <label className="outreach-field">
+          <span>Next follow-up <em className="optional">optional</em></span>
+          <input
+            className="outreach-control"
+            type="date"
+            value={nextFollowup}
+            onChange={(event) => setNextFollowup(event.target.value)}
+            disabled={busy}
+          />
+        </label>
+        <label className="outreach-watcher-opt-in">
+          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} />
+          <span><strong>Confirm funnel change</strong><small>This action runs only when you submit this dialog.</small></span>
+        </label>
+        <div className="dialog-actions">
+          <button className="primary" type="submit" disabled={busy || !confirmed || !note.trim()}>
+            {busy ? "Re-opening..." : "Re-open into outreach"}
+          </button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function DismissTriggerDialog({
+  channel,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  channel: ChannelCardRow;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="dialog clipped outreach-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Dismiss sponsor trigger"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!confirmed || busy) return;
+          onConfirm();
+        }}
+      >
+        <div className="dialog-header">
+          <div>
+            <h2>Dismiss trigger</h2>
+            <div className="dialog-subtitle">{channel.title ?? channel.handle ?? channel.channel_id}</div>
+          </div>
+        </div>
+        <p className="dialog-hint">The creator stays PASSED. This event is dismissed and the watcher resumes for a genuinely later sponsored upload.</p>
+        <label className="outreach-watcher-opt-in">
+          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} />
+          <span><strong>Confirm dismissal</strong><small>No funnel stage changes. Watch history remains intact.</small></span>
+        </label>
+        <div className="dialog-actions">
+          <button className="secondary-action" type="submit" disabled={busy || !confirmed}>
+            {busy ? "Dismissing..." : "Dismiss trigger"}
+          </button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function OutreachDialog({

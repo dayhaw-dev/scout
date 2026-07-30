@@ -32,7 +32,7 @@ test("prospect treatment stays compact and flat", () => {
 test("shared ChannelCard grids cap sparse rows and equalize height only within each row", () => {
   assert.match(styles, /\.channel-card-grid \{[\s\S]*?repeat\(auto-fill, minmax\(min\(300px, 100%\), 336px\)\);[\s\S]*?align-items: stretch;[\s\S]*?justify-content: start;/);
   assert.match(styles, /\.channel-card-grid\.compact-grid \{[\s\S]*?repeat\(auto-fill, minmax\(min\(280px, 100%\), 336px\)\)/);
-  assert.equal((app.match(/className="card-grid channel-card-grid"/g) ?? []).length, 4);
+  assert.equal((app.match(/className="card-grid channel-card-grid"/g) ?? []).length, 5, "TRIGGERED joins the four existing shared-card grids");
   assert.match(app, /className="card-grid compact-grid channel-card-grid"/);
 });
 

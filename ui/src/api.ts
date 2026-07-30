@@ -16,6 +16,19 @@ export interface SponsorAppearanceWatcher {
   last_error: string | null;
 }
 
+export interface OutreachTriggerEvent {
+  id: number;
+  watcher_id: number;
+  trigger_type: "sponsor_appears";
+  fired_at: string;
+  fire_reason: string;
+  video_id: string | null;
+  video_title: string | null;
+  video_published_at: string | null;
+  original_close_at: string | null;
+  original_close_note: string | null;
+}
+
 export interface ContactLink {
   type: string;
   label: string;
@@ -50,6 +63,7 @@ export interface ChannelCardRow {
   woke_at: string | null;
   latest_outreach_note: string | null;
   sponsor_watcher: SponsorAppearanceWatcher | null;
+  outreach_trigger?: OutreachTriggerEvent | null;
   source_seed_title: string | null;
   search_query: string | null;
   mention_count: number;
@@ -399,7 +413,7 @@ export class ScoutApi {
   }
 
   getOutreach() {
-    return this.request<{ working: ChannelCardRow[]; live: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
+    return this.request<{ triggered: ChannelCardRow[]; working: ChannelCardRow[]; live: ChannelCardRow[]; closed: ChannelCardRow[] }>("/api/outreach");
   }
 
   addToRoster(input: string, confirmSpend = false) {
@@ -491,6 +505,25 @@ export class ScoutApi {
     return this.request<{ sponsor_watcher: SponsorAppearanceWatcher }>(
       `/api/outreach/watchers/${watcherId}/deactivate`,
       { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
+  reopenOutreachTrigger(eventId: number, body: {
+    outreach_status: "sent" | "replied" | "in_talks" | "pitched";
+    note: string;
+    next_followup_at: string | null;
+    confirmed: boolean;
+  }) {
+    return this.request<{ outcome: "reopened" }>(
+      `/api/outreach/triggers/${eventId}/reopen`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  }
+
+  dismissOutreachTrigger(eventId: number, confirmed: boolean) {
+    return this.request<{ outcome: "dismissed" }>(
+      `/api/outreach/triggers/${eventId}/dismiss`,
+      { method: "POST", body: JSON.stringify({ confirmed }) },
     );
   }
 

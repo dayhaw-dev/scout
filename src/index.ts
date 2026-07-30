@@ -168,6 +168,8 @@ export default {
       const removeOutreachChannelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach\/remove$/);
       const outreachWatcherMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/outreach\/watchers$/);
       const deactivateOutreachWatcherMatch = url.pathname.match(/^\/api\/outreach\/watchers\/(\d+)\/deactivate$/);
+      const reopenOutreachTriggerMatch = url.pathname.match(/^\/api\/outreach\/triggers\/(\d+)\/reopen$/);
+      const dismissOutreachTriggerMatch = url.pathname.match(/^\/api\/outreach\/triggers\/(\d+)\/dismiss$/);
       const sponsorScanMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan$/);
       const sponsorScanDeepMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/sponsor-scan\/deep-history$/);
 
@@ -347,6 +349,26 @@ export default {
         if (auth) return auth;
         return await deactivateSponsorWatcher(
           Number(deactivateOutreachWatcherMatch[1]),
+          env,
+        );
+      }
+
+      if (reopenOutreachTriggerMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await reopenOutreachTrigger(
+          Number(reopenOutreachTriggerMatch[1]),
+          request,
+          env,
+        );
+      }
+
+      if (dismissOutreachTriggerMatch && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return await dismissOutreachTrigger(
+          Number(dismissOutreachTriggerMatch[1]),
+          request,
           env,
         );
       }
@@ -1449,6 +1471,202 @@ async function deactivateSponsorWatcher(watcherId: number, env: Env): Promise<Re
   const updated = await outreachWatcherById(env, watcherId);
   if (!updated) throw new ResponseError("Sponsor watcher disappeared after deactivation.", 500);
   return json({ sponsor_watcher: sponsorWatcherPayload(updated) });
+}
+
+async function openOutreachTrigger(
+  env: Env,
+  eventId: number,
+): Promise<OutreachTriggerEventRow | null> {
+  return env.SCOUT_DB.prepare(
+    `SELECT
+      ote.id,
+      ote.watcher_id,
+      ow.channel_id,
+      ote.trigger_type,
+      ote.fired_at,
+      ote.fire_reason,
+      ote.video_id,
+      ote.video_title,
+      ote.video_published_at,
+      close_log.created_at AS original_close_at,
+      close_log.note AS original_close_note
+    FROM outreach_trigger_events ote
+    INNER JOIN outreach_watchers ow ON ow.id = ote.watcher_id
+    LEFT JOIN outreach_log close_log ON close_log.id = COALESCE(
+      ow.close_outreach_log_id,
+      (
+        SELECT MAX(fallback_log.id)
+        FROM outreach_log fallback_log
+        WHERE fallback_log.channel_id = ow.channel_id
+          AND fallback_log.event_type = 'closed'
+      )
+    )
+    WHERE ote.id = ?
+      AND ote.resolved_at IS NULL
+    LIMIT 1`,
+  )
+    .bind(eventId)
+    .first<OutreachTriggerEventRow>();
+}
+
+async function reopenOutreachTrigger(
+  eventId: number,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  if (!Number.isSafeInteger(eventId) || eventId < 1) {
+    return json({ error: "Invalid trigger event id." }, 400);
+  }
+  const body = await parseJson<{
+    outreach_status?: unknown;
+    note?: unknown;
+    next_followup_at?: unknown;
+    confirmed?: unknown;
+  }>(request);
+  if (body.confirmed !== true) {
+    return json({ error: "Re-opening a trigger requires confirmation." }, 400);
+  }
+  if (
+    typeof body.outreach_status !== "string"
+    || !LIVE_OUTREACH_STATUSES.some((status) => status === body.outreach_status)
+  ) {
+    return json({ error: "Choose a live outreach stage." }, 400);
+  }
+  if (typeof body.note !== "string" || body.note.trim().length === 0) {
+    return json({ error: "note is required" }, 400);
+  }
+  const nextFollowup = body.next_followup_at === null || body.next_followup_at === ""
+    ? null
+    : typeof body.next_followup_at === "string"
+      ? body.next_followup_at
+      : undefined;
+  if (nextFollowup === undefined || (nextFollowup !== null && Number.isNaN(Date.parse(nextFollowup)))) {
+    return json({ error: "next_followup_at must be null or a parseable date" }, 400);
+  }
+
+  const trigger = await openOutreachTrigger(env, eventId);
+  if (!trigger) return json({ error: "Unresolved trigger event not found." }, 404);
+  if (trigger.trigger_type !== SPONSOR_APPEARS_TRIGGER) {
+    return json({ error: "Unsupported outreach trigger type." }, 400);
+  }
+  const channel = await requireMutableChannel(env, trigger.channel_id);
+  if (channel.outreach_stage !== "passed") {
+    return json({ error: "Only passed outreach can be re-opened from a trigger." }, 409);
+  }
+
+  const reopenedAt = new Date().toISOString();
+  const nextStage = body.outreach_status as OutreachStatus;
+  const eventType = validateOutreachEventType("reopened");
+  await env.SCOUT_DB.batch([
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_trigger_events
+      SET resolved_at = ?, resolution = 'reopened'
+      WHERE id = ? AND resolved_at IS NULL`,
+    ).bind(reopenedAt, eventId),
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_watchers
+      SET active = 0,
+        deactivated_at = ?,
+        next_check_at = ?
+      WHERE id = ?`,
+    ).bind(reopenedAt, reopenedAt, trigger.watcher_id),
+    env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET outreach_stage = ?,
+        is_active = 0,
+        close_disposition = NULL,
+        next_followup_at = ?,
+        contacted_at = COALESCE(contacted_at, CURRENT_TIMESTAMP),
+        last_touch_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(nextStage, nextFollowup, trigger.channel_id),
+    env.SCOUT_DB.prepare(
+      `INSERT INTO outreach_log (
+        channel_id, note, event_type, from_stage, to_stage, close_disposition
+      ) VALUES (?, ?, ?, 'passed', ?, NULL)`,
+    ).bind(
+      trigger.channel_id,
+      body.note.trim().slice(0, 2000),
+      eventType,
+      nextStage,
+    ),
+  ]);
+
+  return json({ outcome: "reopened" });
+}
+
+async function dismissOutreachTrigger(
+  eventId: number,
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  if (!Number.isSafeInteger(eventId) || eventId < 1) {
+    return json({ error: "Invalid trigger event id." }, 400);
+  }
+  const body = await parseJson<{ confirmed?: unknown }>(request);
+  if (body.confirmed !== true) {
+    return json({ error: "Dismissing a trigger requires confirmation." }, 400);
+  }
+
+  const trigger = await openOutreachTrigger(env, eventId);
+  if (!trigger) return json({ error: "Unresolved trigger event not found." }, 404);
+  if (trigger.trigger_type !== SPONSOR_APPEARS_TRIGGER) {
+    return json({ error: "Unsupported outreach trigger type." }, 400);
+  }
+  const channel = await requireMutableChannel(env, trigger.channel_id);
+  if (channel.outreach_stage !== "passed") {
+    return json({ error: "Only passed outreach can retain a dismissed re-engagement watcher." }, 409);
+  }
+  const conflictingWatcher = await env.SCOUT_DB.prepare(
+    `SELECT id
+    FROM outreach_watchers
+    WHERE channel_id = ?
+      AND trigger_type = ?
+      AND active = 1
+      AND id <> ?
+    LIMIT 1`,
+  )
+    .bind(trigger.channel_id, SPONSOR_APPEARS_TRIGGER, trigger.watcher_id)
+    .first<{ id: number }>();
+  if (conflictingWatcher) {
+    return json({ error: "A different sponsor watcher is already active for this channel." }, 409);
+  }
+
+  const dismissedAt = new Date().toISOString();
+  const eventType = validateOutreachEventType("trigger_dismissed");
+  const subject = trigger.video_title ?? trigger.video_id ?? "post-attachment upload";
+  const note = `Dismissed sponsor appearance trigger for ${subject}.`.slice(0, 2000);
+  await env.SCOUT_DB.batch([
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_trigger_events
+      SET resolved_at = ?, resolution = 'dismissed'
+      WHERE id = ? AND resolved_at IS NULL`,
+    ).bind(dismissedAt, eventId),
+    env.SCOUT_DB.prepare(
+      `UPDATE outreach_watchers
+      SET active = 1,
+        deactivated_at = NULL,
+        fired_at = NULL,
+        fire_reason = NULL,
+        next_check_at = ?,
+        last_error = NULL,
+        last_error_at = NULL
+      WHERE id = ?`,
+    ).bind(dismissedAt, trigger.watcher_id),
+    env.SCOUT_DB.prepare(
+      `INSERT INTO outreach_log (
+        channel_id, note, event_type, from_stage, to_stage, close_disposition
+      ) VALUES (?, ?, ?, 'passed', 'passed', ?)`,
+    ).bind(
+      trigger.channel_id,
+      note,
+      eventType,
+      channel.close_disposition,
+    ),
+  ]);
+
+  return json({ outcome: "dismissed" });
 }
 
 async function activeSponsorWatcher(
@@ -2555,30 +2773,90 @@ async function shortlist(url: URL, env: Env): Promise<Response> {
 }
 
 async function outreach(env: Env): Promise<Response> {
-  const [workingRows, liveRows, closedRows] = await Promise.all([
+  const [workingRows, liveRows, closedRows, openTriggers] = await Promise.all([
     outreachRows(env, "working"),
     outreachRows(env, "live"),
     outreachRows(env, "closed"),
+    unresolvedOutreachTriggers(env),
   ]);
-  const working = workingRows.filter(
+  const workingCandidates = workingRows.filter(
     (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "working",
   );
-  const live = liveRows.filter(
+  const liveCandidates = liveRows.filter(
     (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "live",
   );
-  const closed = closedRows.filter(
+  const closedCandidates = closedRows.filter(
     (row) => outreachSection(row.outreach_stage, row.is_active === 1) === "closed",
   );
+  const triggerByChannel = new Map<string, OutreachTriggerEventRow>();
+  for (const trigger of openTriggers) {
+    if (!triggerByChannel.has(trigger.channel_id)) triggerByChannel.set(trigger.channel_id, trigger);
+  }
+  const triggered = [...workingCandidates, ...liveCandidates, ...closedCandidates]
+    .filter((row) => triggerByChannel.has(row.channel_id));
+  const working = workingCandidates.filter((row) => !triggerByChannel.has(row.channel_id));
+  const live = liveCandidates.filter((row) => !triggerByChannel.has(row.channel_id));
+  const closed = closedCandidates.filter((row) => !triggerByChannel.has(row.channel_id));
   const growth = await growthMapForChannels(
     env,
-    [...working, ...live, ...closed].map((row) => row.channel_id),
+    [...working, ...live, ...triggered, ...closed].map((row) => row.channel_id),
   );
 
   return json({
+    triggered: triggered.map((row) => ({
+      ...(channelSummary(row, growth.get(row.channel_id)) as Record<string, unknown>),
+      outreach_trigger: outreachTriggerPayload(triggerByChannel.get(row.channel_id)!),
+    })),
     working: working.map((row) => channelSummary(row, growth.get(row.channel_id))),
     live: live.map((row) => channelSummary(row, growth.get(row.channel_id))),
     closed: closed.map((row) => channelSummary(row, growth.get(row.channel_id))),
   });
+}
+
+async function unresolvedOutreachTriggers(env: Env): Promise<OutreachTriggerEventRow[]> {
+  const { results } = await env.SCOUT_DB.prepare(
+    `SELECT
+      ote.id,
+      ote.watcher_id,
+      ow.channel_id,
+      ote.trigger_type,
+      ote.fired_at,
+      ote.fire_reason,
+      ote.video_id,
+      ote.video_title,
+      ote.video_published_at,
+      close_log.created_at AS original_close_at,
+      close_log.note AS original_close_note
+    FROM outreach_trigger_events ote
+    INNER JOIN outreach_watchers ow ON ow.id = ote.watcher_id
+    LEFT JOIN outreach_log close_log ON close_log.id = COALESCE(
+      ow.close_outreach_log_id,
+      (
+        SELECT MAX(fallback_log.id)
+        FROM outreach_log fallback_log
+        WHERE fallback_log.channel_id = ow.channel_id
+          AND fallback_log.event_type = 'closed'
+      )
+    )
+    WHERE ote.resolved_at IS NULL
+    ORDER BY datetime(ote.fired_at) DESC, ote.id DESC`,
+  ).all<OutreachTriggerEventRow>();
+  return results;
+}
+
+function outreachTriggerPayload(row: OutreachTriggerEventRow): unknown {
+  return {
+    id: row.id,
+    watcher_id: row.watcher_id,
+    trigger_type: row.trigger_type,
+    fired_at: row.fired_at,
+    fire_reason: row.fire_reason,
+    video_id: row.video_id,
+    video_title: row.video_title,
+    video_published_at: row.video_published_at,
+    original_close_at: row.original_close_at,
+    original_close_note: row.original_close_note,
+  };
 }
 
 async function addToRoster(request: Request, env: Env): Promise<Response> {
@@ -2795,6 +3073,12 @@ async function outreachRows(
         FROM outreach_log
         GROUP BY channel_id
       )
+    ),
+    active_watchers AS (
+      SELECT *
+      FROM outreach_watchers
+      WHERE active = 1
+        AND trigger_type = 'sponsor_appears'
     )
     SELECT
       c.*,
@@ -2803,11 +3087,21 @@ async function outreachRows(
       sr.sponsor_scan_sponsored,
       sr.sponsor_scan_last_sponsored,
       sr.sponsor_scan_scanned_at,
-      lo.latest_outreach_note
+      lo.latest_outreach_note,
+      ow.id AS sponsor_watcher_id,
+      ow.trigger_type AS sponsor_watcher_trigger_type,
+      ow.active AS sponsor_watcher_active,
+      ow.baseline_state AS sponsor_watcher_baseline_state,
+      ow.baseline_cutoff_at AS sponsor_watcher_baseline_cutoff_at,
+      ow.attached_at AS sponsor_watcher_attached_at,
+      ow.next_check_at AS sponsor_watcher_next_check_at,
+      ow.last_checked_at AS sponsor_watcher_last_checked_at,
+      ow.last_error AS sponsor_watcher_last_error
     FROM channels c
     LEFT JOIN channels s ON c.source_channel_id = s.channel_id
     LEFT JOIN sponsor_rollups sr ON sr.channel_id = c.channel_id
     LEFT JOIN latest_outreach lo ON lo.channel_id = c.channel_id
+    LEFT JOIN active_watchers ow ON ow.channel_id = c.channel_id
     WHERE ${clause}
     ORDER BY ${order}
     LIMIT 200`,
@@ -4684,6 +4978,20 @@ interface OutreachWatcherRow {
   baseline_newest_video_id: string | null;
   baseline_newest_published_at: string | null;
   deactivated_at: string | null;
+}
+
+interface OutreachTriggerEventRow {
+  id: number;
+  watcher_id: number;
+  channel_id: string;
+  trigger_type: string;
+  fired_at: string;
+  fire_reason: string;
+  video_id: string | null;
+  video_title: string | null;
+  video_published_at: string | null;
+  original_close_at: string | null;
+  original_close_note: string | null;
 }
 
 interface SponsorWatcherScanBudget {

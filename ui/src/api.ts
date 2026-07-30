@@ -1,6 +1,7 @@
 export type ChannelKind = "creator" | "brand" | "alt";
 export type ChannelStatus = "candidate" | "shortlisted" | "watchlist" | "snoozed" | "rejected";
 export type OutreachStatus = "none" | "sent" | "replied" | "in_talks" | "pitched" | "signed" | "passed";
+export type CloseDisposition = "declined" | "no_reply";
 export type DiscoverySource = "mention" | "collab" | "search";
 
 export interface ContactLink {
@@ -26,6 +27,7 @@ export interface ChannelCardRow {
   discovered_via: string;
   status: ChannelStatus;
   outreach_status: OutreachStatus;
+  close_disposition: CloseDisposition | null;
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
@@ -91,6 +93,7 @@ export interface RawChannelRow {
   created_at: string;
   status: ChannelStatus;
   outreach_status?: OutreachStatus;
+  close_disposition?: CloseDisposition | null;
   contacted_at?: string | null;
   last_touch_at?: string | null;
   next_followup_at?: string | null;
@@ -442,8 +445,8 @@ export class ScoutApi {
     });
   }
 
-  logOutreach(channelId: string, body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
-    return this.request<{ channel: RawChannelRow; log: Array<{ id: number; channel_id: string; created_at: string; note: string }> }>(
+  logOutreach(channelId: string, body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null; close_disposition: CloseDisposition | null }) {
+    return this.request<{ channel: RawChannelRow; log: Array<{ id: number; channel_id: string; created_at: string; note: string; event_type: string; from_stage: OutreachStatus | null; to_stage: OutreachStatus | null; close_disposition: CloseDisposition | null }> }>(
       `/api/channels/${encodeURIComponent(channelId)}/outreach`,
       {
         method: "POST",

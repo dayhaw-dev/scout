@@ -7,6 +7,7 @@ import {
   ChannelCardRow,
   ChannelKind,
   ChannelStatus,
+  CloseDisposition,
   EnrichSummary,
   ExpandAllSeedsSummary,
   MineQueriesPlan,
@@ -57,6 +58,12 @@ type SponsorScanTarget = {
   summary: SponsorScanSummary;
 };
 type SnoozeInput = { snoozed_until: string; snooze_reason: string };
+type OutreachLogInput = {
+  outreach_status: OutreachStatus;
+  note: string;
+  next_followup_at: string | null;
+  close_disposition: CloseDisposition | null;
+};
 
 const SESSION_KEY = "scout_admin_key";
 const EXPAND_ALL_CLIENT_CREDIT_CAP = 150;
@@ -704,7 +711,7 @@ function StageView({
     }
   }
 
-  async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
+  async function handleOutreachLog(body: OutreachLogInput) {
     if (!outreachChannel) return;
     const channel = outreachChannel;
     try {
@@ -1435,7 +1442,7 @@ function OutreachView({
     }
   }
 
-  async function handleOutreachLog(body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) {
+  async function handleOutreachLog(body: OutreachLogInput) {
     if (!outreachChannel) return;
     const channel = outreachChannel;
     try {
@@ -2515,7 +2522,12 @@ function ChannelCard({
       </div>
       <div className="status-chip-row">
         {tab === "outreach" && channel.outreach_status && channel.outreach_status !== "none" && (
-          <span className="chip badge-stage outreach-chip">{outreachLabel(channel.outreach_status)}</span>
+          <span className="chip badge-stage outreach-chip">
+            {outreachLabel(channel.outreach_status)}
+            {channel.outreach_status === "passed"
+              ? ` · ${channel.close_disposition === "declined" ? "DECLINED" : channel.close_disposition === "no_reply" ? "NO REPLY" : "PASS REASON UNKNOWN"}`
+              : ""}
+          </span>
         )}
         {channel.kind === "brand" && <span className="chip badge-attribute kind-brand">BRAND</span>}
         {hotChannel(channel) && <span className="chip badge-alert hot-chip">HOT</span>}
@@ -3071,13 +3083,16 @@ function OutreachDialog({
 }: {
   channel: ChannelCardRow;
   onClose: () => void;
-  onSubmit: (body: { outreach_status: OutreachStatus; note: string; next_followup_at: string | null }) => void;
+  onSubmit: (body: OutreachLogInput) => void;
 }) {
   const [outreachStatus, setOutreachStatus] = useState<OutreachStatus>(
     channel.outreach_status && channel.outreach_status !== "none" ? channel.outreach_status : "sent",
   );
   const [note, setNote] = useState(channel.latest_outreach_note ?? "");
   const [nextFollowup, setNextFollowup] = useState(channel.next_followup_at ? dateInputValue(channel.next_followup_at) : "");
+  const [closeDisposition, setCloseDisposition] = useState<CloseDisposition | "">(
+    channel.outreach_status === "passed" ? channel.close_disposition ?? "" : "",
+  );
   const closed = outreachStatus === "signed" || outreachStatus === "passed";
   const updating =
     channel.outreach_status === "sent" ||
@@ -3088,6 +3103,10 @@ function OutreachDialog({
   useEffect(() => {
     if (closed) setNextFollowup("");
   }, [closed]);
+
+  useEffect(() => {
+    if (outreachStatus !== "passed") setCloseDisposition("");
+  }, [outreachStatus]);
 
   return (
     <div className="dialog-backdrop" role="presentation">
@@ -3102,6 +3121,7 @@ function OutreachDialog({
             outreach_status: outreachStatus,
             note,
             next_followup_at: nextFollowup || null,
+            close_disposition: outreachStatus === "passed" ? closeDisposition || null : null,
           });
         }}
       >
@@ -3119,6 +3139,21 @@ function OutreachDialog({
             ))}
           </select>
         </label>
+        {outreachStatus === "passed" && (
+          <label className="outreach-field">
+            <span>Why closed?</span>
+            <select
+              className="outreach-control"
+              value={closeDisposition}
+              onChange={(event) => setCloseDisposition(event.target.value as CloseDisposition | "")}
+              required
+            >
+              <option value="" disabled>Select a reason</option>
+              <option value="declined">DECLINED</option>
+              <option value="no_reply">NO REPLY / WENT DARK</option>
+            </select>
+          </label>
+        )}
         <label className="outreach-field">
           <span>Note</span>
           <textarea
@@ -3145,7 +3180,13 @@ function OutreachDialog({
           <p className="dialog-hint">Signed channels will offer a one-click seed prompt after logging.</p>
         )}
         <div className="dialog-actions">
-          <button className="primary" type="submit" disabled={!note.trim()}>Save log</button>
+          <button
+            className="primary"
+            type="submit"
+            disabled={!note.trim() || (outreachStatus === "passed" && !closeDisposition)}
+          >
+            Save log
+          </button>
           <button type="button" onClick={onClose}>Cancel</button>
         </div>
       </form>

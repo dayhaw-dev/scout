@@ -78,9 +78,12 @@ import {
   StoredSeedVideo,
 } from "./lib/seed-freshness";
 import {
+  CloseDisposition,
   CLOSED_OUTREACH_STATUSES,
   LIVE_OUTREACH_STATUSES,
   OUTREACH_STATUSES,
+  OutreachValidationError,
+  planOutreachStageEvent,
   outreachSection,
   outreachSqlList,
   OutreachStatus,
@@ -1108,6 +1111,7 @@ async function logOutreach(
     outreach_status?: unknown;
     note?: unknown;
     next_followup_at?: unknown;
+    close_disposition?: unknown;
   }>(request);
   if (!VALID_OUTREACH_STATUSES.has(body.outreach_status as OutreachStatus)) {
     return json({ error: "Invalid outreach_status" }, 400);
@@ -1130,6 +1134,19 @@ async function logOutreach(
   }
 
   const nextStatus = body.outreach_status as OutreachStatus;
+  let stageEvent;
+  try {
+    stageEvent = planOutreachStageEvent(
+      existing.outreach_stage,
+      nextStatus,
+      body.close_disposition,
+    );
+  } catch (error) {
+    if (error instanceof OutreachValidationError) {
+      return json({ error: error.message }, 400);
+    }
+    throw error;
+  }
   const contactedExpression =
     nextStatus === "none"
       ? "contacted_at"
@@ -1142,13 +1159,22 @@ async function logOutreach(
         contacted_at = ${contactedExpression},
         last_touch_at = CURRENT_TIMESTAMP,
         next_followup_at = ?,
+        close_disposition = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE channel_id = ?`,
-    ).bind(nextStatus, nextFollowup, channelId),
+    ).bind(nextStatus, nextFollowup, stageEvent.channelCloseDisposition, channelId),
     env.SCOUT_DB.prepare(
-      `INSERT INTO outreach_log (channel_id, note)
-      VALUES (?, ?)`,
-    ).bind(channelId, body.note.trim().slice(0, 2000)),
+      `INSERT INTO outreach_log (
+        channel_id, note, event_type, from_stage, to_stage, close_disposition
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      channelId,
+      body.note.trim().slice(0, 2000),
+      stageEvent.eventType,
+      stageEvent.fromStage,
+      stageEvent.toStage,
+      stageEvent.logCloseDisposition,
+    ),
   ]);
 
   return json({
@@ -1872,7 +1898,8 @@ async function outreachRows(
 
 async function outreachLog(env: Env, channelId: string): Promise<unknown[]> {
   const { results } = await env.SCOUT_DB.prepare(
-    `SELECT id, channel_id, created_at, note
+    `SELECT id, channel_id, created_at, note,
+      event_type, from_stage, to_stage, close_disposition
     FROM outreach_log
     WHERE channel_id = ?
     ORDER BY created_at DESC, id DESC
@@ -3610,6 +3637,7 @@ interface ChannelRow {
   status: ChannelStatus;
   outreach_status: string;
   outreach_stage: OutreachStatus;
+  close_disposition: CloseDisposition | null;
   contacted_at: string | null;
   last_touch_at: string | null;
   next_followup_at: string | null;
@@ -4361,6 +4389,7 @@ function channelSummary(
     discovered_via: row.discovered_via,
     status: row.status,
     outreach_status: row.outreach_stage ?? "none",
+    close_disposition: row.close_disposition ?? null,
     contacted_at: row.contacted_at ?? null,
     last_touch_at: row.last_touch_at ?? null,
     next_followup_at: row.next_followup_at ?? null,

@@ -70,7 +70,7 @@ test("every non-Pool primary action uses the same max-content card button", () =
 
 test("Eyes Peeled keeps its growth chips, NO TREND state, and sparkline inside the shared card", () => {
   assert.match(app, /<GrowthChipItems row=\{channel\} \/>/);
-  assert.match(app, /<Sparkline points=\{channel\.snapshots \?\? \[\]\} \/>/);
+  assert.match(app, /<Sparkline points=\{channel\.snapshots \?\? \[\]\} mode="subs" \/>/);
   assert.match(app, /className="chip badge-attribute no-trend-chip">NO TREND/);
   assert.match(app, /growthWindowLabel\("SUBS", 7/);
   assert.match(app, /growthWindowLabel\("SUBS", 30/);

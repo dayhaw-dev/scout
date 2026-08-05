@@ -2,6 +2,8 @@ export interface SnapshotPoint {
   subscriber_count: number | null;
   view_count: number | null;
   video_count?: number | null;
+  median_recent_views?: number | null;
+  job_id?: number | null;
   taken_at: string;
 }
 
@@ -12,6 +14,11 @@ export interface GrowthMetrics {
   subs_growth_30d_days: number | null;
   views_growth_30d: number | null;
   views_growth_30d_days: number | null;
+  median_views_growth_7d: number | null;
+  median_views_growth_7d_days: number | null;
+  median_views_growth_30d: number | null;
+  median_views_growth_30d_days: number | null;
+  median_tracking_days: number | null;
   tracking_days: number | null;
   first_snapshot_at: string | null;
   latest_snapshot_at: string | null;
@@ -24,6 +31,15 @@ export const MOVER_CONFIG = {
 } as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+type SnapshotMetricField = "subscriber_count" | "view_count" | "median_recent_views";
+
+interface MetricGrowth {
+  growth7d: number | null;
+  growth7dDays: number | null;
+  growth30d: number | null;
+  growth30dDays: number | null;
+  trackingDays: number | null;
+}
 
 export function computeGrowthMetrics(
   snapshots: SnapshotPoint[],
@@ -42,26 +58,22 @@ export function computeGrowthMetrics(
   const firstTime = new Date(first.taken_at).getTime();
   const latestTime = new Date(latest.taken_at).getTime();
   const trackingDays = Math.max(0, Math.floor((latestTime - firstTime) / DAY_MS));
-
-  if (sorted.length < 2 || trackingDays < 5) {
-    return {
-      ...emptyGrowth(sorted),
-      tracking_days: trackingDays,
-      first_snapshot_at: first.taken_at,
-      latest_snapshot_at: latest.taken_at,
-    };
-  }
-
-  const baseline7d = nearestSnapshot(sorted, new Date(now.getTime() - 7 * DAY_MS));
-  const baseline30d = nearestSnapshot(sorted, new Date(now.getTime() - 30 * DAY_MS));
+  const subscriberGrowth = metricGrowth(sorted, "subscriber_count", now);
+  const viewGrowth = metricGrowth(sorted, "view_count", now);
+  const medianViewGrowth = metricGrowth(sorted, "median_recent_views", now);
 
   return {
-    subs_growth_7d: percentGrowth(baseline7d, latest, "subscriber_count"),
-    subs_growth_7d_days: growthSpanDays(baseline7d, latest, 7),
-    subs_growth_30d: percentGrowth(baseline30d, latest, "subscriber_count"),
-    subs_growth_30d_days: growthSpanDays(baseline30d, latest, 30),
-    views_growth_30d: percentGrowth(baseline30d, latest, "view_count"),
-    views_growth_30d_days: growthSpanDays(baseline30d, latest, 30),
+    subs_growth_7d: subscriberGrowth.growth7d,
+    subs_growth_7d_days: subscriberGrowth.growth7dDays,
+    subs_growth_30d: subscriberGrowth.growth30d,
+    subs_growth_30d_days: subscriberGrowth.growth30dDays,
+    views_growth_30d: viewGrowth.growth30d,
+    views_growth_30d_days: viewGrowth.growth30dDays,
+    median_views_growth_7d: medianViewGrowth.growth7d,
+    median_views_growth_7d_days: medianViewGrowth.growth7dDays,
+    median_views_growth_30d: medianViewGrowth.growth30d,
+    median_views_growth_30d_days: medianViewGrowth.growth30dDays,
+    median_tracking_days: medianViewGrowth.trackingDays,
     tracking_days: trackingDays,
     first_snapshot_at: first.taken_at,
     latest_snapshot_at: latest.taken_at,
@@ -84,10 +96,61 @@ function emptyGrowth(snapshots: SnapshotPoint[]): GrowthMetrics {
     subs_growth_30d_days: null,
     views_growth_30d: null,
     views_growth_30d_days: null,
+    median_views_growth_7d: null,
+    median_views_growth_7d_days: null,
+    median_views_growth_30d: null,
+    median_views_growth_30d_days: null,
+    median_tracking_days: null,
     tracking_days: null,
     first_snapshot_at: null,
     latest_snapshot_at: null,
     snapshots,
+  };
+}
+
+function metricGrowth(
+  snapshots: SnapshotPoint[],
+  field: SnapshotMetricField,
+  now: Date,
+): MetricGrowth {
+  const sampled = snapshots.filter((snapshot) => {
+    const value = snapshot[field];
+    return typeof value === "number" && Number.isFinite(value);
+  });
+  if (sampled.length === 0) {
+    return {
+      growth7d: null,
+      growth7dDays: null,
+      growth30d: null,
+      growth30dDays: null,
+      trackingDays: null,
+    };
+  }
+
+  const first = sampled[0];
+  const latest = sampled[sampled.length - 1];
+  const trackingDays = Math.max(
+    0,
+    Math.floor((new Date(latest.taken_at).getTime() - new Date(first.taken_at).getTime()) / DAY_MS),
+  );
+  if (sampled.length < 2 || trackingDays < 5) {
+    return {
+      growth7d: null,
+      growth7dDays: null,
+      growth30d: null,
+      growth30dDays: null,
+      trackingDays,
+    };
+  }
+
+  const baseline7d = nearestSnapshot(sampled, new Date(now.getTime() - 7 * DAY_MS));
+  const baseline30d = nearestSnapshot(sampled, new Date(now.getTime() - 30 * DAY_MS));
+  return {
+    growth7d: percentGrowth(baseline7d, latest, field),
+    growth7dDays: growthSpanDays(baseline7d, latest, 7),
+    growth30d: percentGrowth(baseline30d, latest, field),
+    growth30dDays: growthSpanDays(baseline30d, latest, 30),
+    trackingDays,
   };
 }
 
@@ -103,7 +166,7 @@ function nearestSnapshot(snapshots: SnapshotPoint[], target: Date): SnapshotPoin
 function percentGrowth(
   baseline: SnapshotPoint,
   latest: SnapshotPoint,
-  field: "subscriber_count" | "view_count",
+  field: SnapshotMetricField,
 ): number | null {
   const start = baseline[field];
   const end = latest[field];

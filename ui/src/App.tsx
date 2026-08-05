@@ -2771,7 +2771,9 @@ function ChannelCard({
       {triggered && channel.outreach_trigger && (
         <SponsorTriggerContext trigger={channel.outreach_trigger} />
       )}
-      <Sparkline points={channel.snapshots ?? []} />
+      {tab === "outreach"
+        ? <OutreachMetricHistory points={channel.snapshots ?? []} />
+        : <Sparkline points={channel.snapshots ?? []} mode="subs" />}
       {hasFooter && (
         <div className="card-footer">
           <IconLinks links={channel.contact_links} confirmedEmail={showConfirmedEmail} />
@@ -3935,6 +3937,10 @@ type GrowthRow = Pick<
   | "subs_growth_30d_days"
   | "views_growth_30d"
   | "views_growth_30d_days"
+  | "median_views_growth_7d"
+  | "median_views_growth_7d_days"
+  | "median_views_growth_30d"
+  | "median_views_growth_30d_days"
   | "tracking_days"
   | "snapshots"
 >;
@@ -3942,7 +3948,9 @@ type GrowthRow = Pick<
 function GrowthChips({ row }: { row: Partial<GrowthRow> }) {
   const hasGrowth = row.subs_growth_7d !== null && row.subs_growth_7d !== undefined
     || row.subs_growth_30d !== null && row.subs_growth_30d !== undefined
-    || row.views_growth_30d !== null && row.views_growth_30d !== undefined;
+    || row.views_growth_30d !== null && row.views_growth_30d !== undefined
+    || row.median_views_growth_7d !== null && row.median_views_growth_7d !== undefined
+    || row.median_views_growth_30d !== null && row.median_views_growth_30d !== undefined;
   const snapshotCount = row.snapshots?.length ?? 0;
   if (!hasGrowth && snapshotCount === 0) return null;
   return <div className="growth-row"><GrowthChipItems row={row} /></div>;
@@ -3951,7 +3959,9 @@ function GrowthChips({ row }: { row: Partial<GrowthRow> }) {
 function GrowthChipItems({ row }: { row: Partial<GrowthRow> }) {
   const hasGrowth = row.subs_growth_7d !== null && row.subs_growth_7d !== undefined
     || row.subs_growth_30d !== null && row.subs_growth_30d !== undefined
-    || row.views_growth_30d !== null && row.views_growth_30d !== undefined;
+    || row.views_growth_30d !== null && row.views_growth_30d !== undefined
+    || row.median_views_growth_7d !== null && row.median_views_growth_7d !== undefined
+    || row.median_views_growth_30d !== null && row.median_views_growth_30d !== undefined;
   const snapshotCount = row.snapshots?.length ?? 0;
 
   if (!hasGrowth) {
@@ -3972,14 +3982,43 @@ function GrowthChipItems({ row }: { row: Partial<GrowthRow> }) {
       {row.views_growth_30d !== null && row.views_growth_30d !== undefined && (
         <span className="chip badge-attribute growth-chip dim">{growthWindowLabel("VIEWS", 30, row.views_growth_30d_days)} {formatPercent(row.views_growth_30d)}</span>
       )}
+      {row.median_views_growth_7d !== null && row.median_views_growth_7d !== undefined && (
+        <span className="chip badge-attribute growth-chip dim">{growthWindowLabel("V/VID", 7, row.median_views_growth_7d_days)} {formatPercent(row.median_views_growth_7d)}</span>
+      )}
+      {row.median_views_growth_30d !== null && row.median_views_growth_30d !== undefined && (
+        <span className="chip badge-attribute growth-chip dim">{growthWindowLabel("V/VID", 30, row.median_views_growth_30d_days)} {formatPercent(row.median_views_growth_30d)}</span>
+      )}
     </>
   );
 }
 
-function Sparkline({ points }: { points: ChannelCardRow["snapshots"] }) {
+type SparklineMode = "subs" | "views";
+
+function OutreachMetricHistory({ points }: { points: ChannelCardRow["snapshots"] }) {
+  const [mode, setMode] = useState<SparklineMode>("subs");
+  return (
+    <div className="metric-history">
+      <div className="metric-mode" role="group" aria-label="History metric">
+        <button type="button" aria-pressed={mode === "subs"} onClick={() => setMode("subs")}>SUBS</button>
+        <button type="button" aria-pressed={mode === "views"} onClick={() => setMode("views")}>V/VID</button>
+      </div>
+      <Sparkline points={points} mode={mode} showUnderTwo />
+    </div>
+  );
+}
+
+function Sparkline({
+  points,
+  mode,
+  showUnderTwo = false,
+}: {
+  points: ChannelCardRow["snapshots"];
+  mode: SparklineMode;
+  showUnderTwo?: boolean;
+}) {
   const plotted = (points ?? [])
     .map((point) => ({
-      value: point.subscriber_count,
+      value: mode === "subs" ? point.subscriber_count : point.median_recent_views,
       timestamp: Date.parse(point.taken_at),
     }))
     .filter((point): point is { value: number; timestamp: number } => (
@@ -3988,7 +4027,14 @@ function Sparkline({ points }: { points: ChannelCardRow["snapshots"] }) {
       && Number.isFinite(point.timestamp)
     ))
     .sort((a, b) => a.timestamp - b.timestamp);
-  if (plotted.length < 2) return null;
+  if (plotted.length < 2) {
+    if (!showUnderTwo) return null;
+    return (
+      <div className="sparkline-pending">
+        {mode === "subs" ? "SUBS" : "V/VID"} history needs 2 samples · {plotted.length}/2
+      </div>
+    );
+  }
 
   const values = plotted.map((point) => point.value);
   const min = Math.min(...values);
@@ -4009,7 +4055,10 @@ function Sparkline({ points }: { points: ChannelCardRow["snapshots"] }) {
     : 0;
 
   return (
-    <div className="sparkline-wrap" title={`Subscriber change over plotted span: ${formatPercent(netChange)}`}>
+    <div
+      className={`sparkline-wrap metric-${mode}`}
+      title={`${mode === "subs" ? "Subscriber" : "Median views/video"} change over plotted span: ${formatPercent(netChange)}`}
+    >
       <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
         <path d={d} />
       </svg>
@@ -5136,7 +5185,7 @@ function formatPercent(value: number): string {
 }
 
 function growthWindowLabel(
-  metric: "SUBS" | "VIEWS",
+  metric: "SUBS" | "VIEWS" | "V/VID",
   targetDays: number,
   actualDays: number | null | undefined,
 ): string {

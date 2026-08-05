@@ -88,6 +88,11 @@ export interface ChannelCardRow {
   subs_growth_30d_days: number | null;
   views_growth_30d: number | null;
   views_growth_30d_days: number | null;
+  median_views_growth_7d: number | null;
+  median_views_growth_7d_days: number | null;
+  median_views_growth_30d: number | null;
+  median_views_growth_30d_days: number | null;
+  median_tracking_days: number | null;
   tracking_days: number | null;
   first_snapshot_at: string | null;
   latest_snapshot_at: string | null;
@@ -143,6 +148,11 @@ export interface RawChannelRow {
   subs_growth_30d_days?: number | null;
   views_growth_30d?: number | null;
   views_growth_30d_days?: number | null;
+  median_views_growth_7d?: number | null;
+  median_views_growth_7d_days?: number | null;
+  median_views_growth_30d?: number | null;
+  median_views_growth_30d_days?: number | null;
+  median_tracking_days?: number | null;
   tracking_days?: number | null;
   first_snapshot_at?: string | null;
   latest_snapshot_at?: string | null;
@@ -192,6 +202,8 @@ export interface SnapshotPoint {
   subscriber_count: number | null;
   view_count: number | null;
   video_count?: number | null;
+  median_recent_views?: number | null;
+  job_id?: number | null;
   taken_at: string;
 }
 

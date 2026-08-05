@@ -1,3 +1,5 @@
+import { WATCHLIST_CRON } from "./outreach-tracking.js";
+
 export interface SnapshotTargetState {
   channel_id: string;
   last_snapshot_at: string | null;
@@ -13,7 +15,7 @@ export interface SnapshotPlan {
 export const SNAPSHOT_CONFIG = {
   maxPerRun: 60,
   skipWithinHours: 48,
-  cron: "0 9 * * 1,4",
+  cron: WATCHLIST_CRON,
 } as const;
 
 export function planSnapshotRun(

@@ -2,6 +2,7 @@ import {
   Env,
   ScrapeCreatorsApiError,
   ScrapeCreatorsChannel,
+  ScrapeCreatorsChannelVideos,
   ScrapeCreatorsClient,
   ScrapeCreatorsSearch,
   ScrapeCreatorsSearchUploadDate,
@@ -94,6 +95,14 @@ import {
   RosterInputError,
   RosterLookup,
 } from "./lib/roster";
+import {
+  collectOutreachTrackingMetrics,
+  OPEN_OUTREACH_WHERE,
+  outreachTrackingJobIdentity,
+  OutreachTrackingTrigger,
+  scheduledJobForCron,
+  summarizeOutreachTrackingResults,
+} from "./lib/outreach-tracking";
 import {
   mergeSponsorWatcherBaseline,
   newestSponsorWatcherBaseline,
@@ -223,6 +232,12 @@ export default {
         const auth = await requireAdmin(request, env);
         if (auth) return auth;
         return snapshotNow(request, env);
+      }
+
+      if (url.pathname === "/api/admin/outreach-tracking/run" && request.method === "POST") {
+        const auth = await requireAdmin(request, env);
+        if (auth) return auth;
+        return json(await runOpenOutreachTrackingJob(env, "manual", new Date()));
       }
 
       if (url.pathname === "/api/admin/mine-queries" && request.method === "POST") {
@@ -429,32 +444,53 @@ export default {
   },
 
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    await wakeDueSnoozed(env);
-    await runWatcherPhaseBeforeSnapshots({
-      watcherPhase: () => runSponsorWatcherCronPass(env, new Date()),
-      cooldown: () => delay(sponsorWatcherSnapshotCooldownMs()),
-      snapshotPhase: () => runSnapshotJob(
-        env,
-        `${SNAPSHOT_JOB_KIND}:watchlist:cron`,
-        new Date(),
-        {
-          scope: "watchlist",
-          includeSnoozed: true,
-        },
-      ).then(() => undefined),
-      onWatcherError: (error) => {
-        console.error(JSON.stringify({
-          event: "sponsor_watcher_phase_failed",
-          error: errorMessage(error),
+    switch (scheduledJobForCron(controller.cron)) {
+      case "watchlist":
+        await runExistingScheduledJob(env);
+        return;
+      case "outreach_tracking":
+        await runOpenOutreachTrackingJob(
+          env,
+          "scheduled",
+          new Date(controller.scheduledTime),
+        );
+        return;
+      default:
+        console.warn(JSON.stringify({
+          event: "unhandled_cron",
+          cron: controller.cron,
+          scheduled_time: controller.scheduledTime,
         }));
-      },
-    });
+    }
   },
 };
+
+async function runExistingScheduledJob(env: Env): Promise<void> {
+  await wakeDueSnoozed(env);
+  await runWatcherPhaseBeforeSnapshots({
+    watcherPhase: () => runSponsorWatcherCronPass(env, new Date()),
+    cooldown: () => delay(sponsorWatcherSnapshotCooldownMs()),
+    snapshotPhase: () => runSnapshotJob(
+      env,
+      `${SNAPSHOT_JOB_KIND}:watchlist:cron`,
+      new Date(),
+      {
+        scope: "watchlist",
+        includeSnoozed: true,
+      },
+    ).then(() => undefined),
+    onWatcherError: (error) => {
+      console.error(JSON.stringify({
+        event: "sponsor_watcher_phase_failed",
+        error: errorMessage(error),
+      }));
+    },
+  });
+}
 
 async function createSeed(request: Request, env: Env): Promise<Response> {
   const body = await parseJson<{ handle?: unknown }>(request);
@@ -4466,6 +4502,408 @@ async function finishSnapshotJob(
     .run();
 }
 
+async function runOpenOutreachTrackingJob(
+  env: Env,
+  trigger: OutreachTrackingTrigger,
+  runAt: Date,
+): Promise<OutreachTrackingRunSummary | null> {
+  const identity = outreachTrackingJobIdentity(trigger, runAt);
+  const startedAt = new Date().toISOString();
+  const job = await env.SCOUT_DB.prepare(
+    `INSERT INTO jobs (kind, started_at, scheduled_for, status)
+    VALUES (?, ?, ?, 'running')
+    ON CONFLICT DO NOTHING
+    RETURNING id`,
+  )
+    .bind(identity.kind, startedAt, identity.scheduledFor)
+    .first<{ id: number }>();
+  if (!job) {
+    console.log(JSON.stringify({
+      event: "outreach_tracking_duplicate_skipped",
+      trigger,
+      scheduled_for: identity.scheduledFor,
+    }));
+    return null;
+  }
+
+  let targetsConsidered = 0;
+  const channelResults: OutreachTrackingChannelResult[] = [];
+
+  try {
+    const { results: targets } = await env.SCOUT_DB.prepare(
+      `SELECT *
+      FROM channels
+      WHERE ${OPEN_OUTREACH_WHERE}
+      ORDER BY is_active DESC, LOWER(COALESCE(title, handle, channel_id)) ASC`,
+    ).all<ChannelRow>();
+    targetsConsidered = targets.length;
+
+    await env.SCOUT_DB.prepare(
+      "UPDATE jobs SET targets_considered = ? WHERE id = ?",
+    )
+      .bind(targetsConsidered, job.id)
+      .run();
+
+    for (const target of targets) {
+      const result = await trackOpenOutreachChannel(env, job.id, target);
+      channelResults.push(result);
+    }
+
+    const accounting = summarizeOutreachTrackingResults(channelResults);
+    const {
+      channelsSucceeded,
+      channelsFailed,
+      channelsPartial,
+      channelsSnapshotted,
+      creditsSpent,
+    } = accounting;
+    const status = channelsFailed > 0 || channelsPartial > 0
+      ? "completed_with_errors"
+      : "completed";
+    const note = channelsPartial > 0
+      ? `${channelsPartial} partial channel result(s).`
+      : null;
+    await finishOutreachTrackingJob(env, {
+      jobId: job.id,
+      finishedAt: new Date().toISOString(),
+      targetsConsidered,
+      channelsSucceeded,
+      channelsFailed,
+      channelsPartial,
+      channelsSnapshotted,
+      creditsSpent,
+      status,
+      note,
+    });
+    return {
+      job_id: job.id,
+      kind: identity.kind,
+      trigger,
+      scheduled_for: identity.scheduledFor,
+      status,
+      targets_considered: targetsConsidered,
+      channels_succeeded: channelsSucceeded,
+      channels_failed: channelsFailed,
+      channels_partial: channelsPartial,
+      channels_snapshotted: channelsSnapshotted,
+      credits_spent: creditsSpent,
+      note,
+    };
+  } catch (error) {
+    const accounting = summarizeOutreachTrackingResults(channelResults);
+    await finishOutreachTrackingJob(env, {
+      jobId: job.id,
+      finishedAt: new Date().toISOString(),
+      targetsConsidered,
+      ...accounting,
+      status: "failed",
+      note: `Failed: ${errorMessage(error)}`,
+    });
+    throw error;
+  }
+}
+
+async function trackOpenOutreachChannel(
+  env: Env,
+  jobId: number,
+  target: ChannelRow,
+): Promise<OutreachTrackingChannelResult> {
+  const startedAt = new Date().toISOString();
+  const credits: OutreachTrackingCreditCounts = { getChannel: 0, getVideos: 0 };
+  const client = new ScrapeCreatorsClient(env, {
+    onApiLog(event) {
+      if (event.endpoint.startsWith("/v1/youtube/channel-videos?")) {
+        credits.getVideos += 1;
+      } else {
+        credits.getChannel += 1;
+      }
+    },
+  });
+  const collected = await collectOutreachTrackingMetrics({
+    getChannel: async () => {
+      const channel = await client.getChannel(target.channel_id);
+      if (!channel.channelId || channel.channelId !== target.channel_id) {
+        throw new ResponseError("Tracked channel response did not match the requested channel.", 502);
+      }
+      return channel;
+    },
+    getVideos: () => client.getChannelVideosPage(target.channel_id),
+  });
+
+  let outcome = collected.outcome;
+  let snapshotId: number | null = null;
+  let scoreRecomputed = false;
+  let scoreNote = collected.scoreNote;
+  let persistenceError: string | null = null;
+
+  if (collected.shouldWriteSnapshot) {
+    try {
+      snapshotId = await persistOutreachTrackingMetrics(env, {
+        jobId,
+        target,
+        channel: collected.channel,
+        videos: collected.videos,
+        shouldRecomputeScore: collected.shouldRecomputeScore,
+        capturedAt: new Date(),
+      });
+      scoreRecomputed = collected.shouldRecomputeScore;
+    } catch (error) {
+      outcome = "failed";
+      scoreRecomputed = false;
+      persistenceError = errorMessage(error);
+      scoreNote = "score not recomputed: metric persistence failed";
+    }
+  }
+
+  const finishedAt = new Date().toISOString();
+  const creditsSpent = credits.getChannel + credits.getVideos;
+  await env.SCOUT_DB.prepare(
+    `INSERT INTO job_channel_results (
+      job_id,
+      channel_id,
+      outcome,
+      get_channel_status,
+      get_channel_credits,
+      get_channel_error,
+      get_videos_status,
+      get_videos_credits,
+      get_videos_error,
+      persistence_error,
+      credits_spent,
+      snapshot_id,
+      score_recomputed,
+      score_note,
+      started_at,
+      finished_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      jobId,
+      target.channel_id,
+      outcome,
+      collected.getChannelStatus,
+      credits.getChannel,
+      collected.getChannelError ? errorMessage(collected.getChannelError) : null,
+      collected.getVideosStatus,
+      credits.getVideos,
+      collected.getVideosError ? errorMessage(collected.getVideosError) : null,
+      persistenceError,
+      creditsSpent,
+      snapshotId,
+      scoreRecomputed ? 1 : 0,
+      scoreNote,
+      startedAt,
+      finishedAt,
+    )
+    .run();
+
+  return {
+    outcome,
+    creditsSpent,
+    snapshotWritten: snapshotId !== null,
+  };
+}
+
+async function persistOutreachTrackingMetrics(
+  env: Env,
+  input: {
+    jobId: number;
+    target: ChannelRow;
+    channel: ScrapeCreatorsChannel | null;
+    videos: ScrapeCreatorsChannelVideos | null;
+    shouldRecomputeScore: boolean;
+    capturedAt: Date;
+  },
+): Promise<number> {
+  const live = input.channel ? liveChannelFields(input.channel) : null;
+  const activity = input.videos
+    ? activityMetrics(
+      Array.isArray(input.videos.videos) ? input.videos.videos : [],
+      live?.subscriberCount ?? input.target.subscriber_count,
+      input.capturedAt,
+    )
+    : null;
+  const statements: D1PreparedStatement[] = [
+    env.SCOUT_DB.prepare(
+      `INSERT INTO snapshots (
+        channel_id,
+        subscriber_count,
+        view_count,
+        video_count,
+        median_recent_views,
+        taken_at,
+        job_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      input.target.channel_id,
+      live?.subscriberCount ?? null,
+      live?.viewCount ?? null,
+      live?.videoCount ?? null,
+      activity?.medianRecentViews ?? null,
+      input.capturedAt.toISOString(),
+      input.jobId,
+    ),
+  ];
+
+  if (live && activity && input.shouldRecomputeScore) {
+    const scoring = scoreFromRow({
+      ...input.target,
+      handle: live.handle ?? input.target.handle,
+      title: live.title ?? input.target.title,
+      description: live.description ?? input.target.description,
+      subscriber_count: live.subscriberCount,
+      video_count: live.videoCount,
+      view_count: live.viewCount,
+      country: live.country ?? input.target.country,
+      published_at: live.publishedAt ?? input.target.published_at,
+      thumbnail_url: live.thumbnailUrl ?? input.target.thumbnail_url,
+      raw_json: live.rawJson,
+      last_upload_at: activity.lastUploadAt,
+      uploads_last_90d: activity.uploadsLast90d,
+      median_recent_views: activity.medianRecentViews,
+      recent_velocity: activity.recentVelocity,
+      enriched_at: input.capturedAt.toISOString(),
+    });
+    statements.push(env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET handle = COALESCE(?, handle),
+        title = COALESCE(?, title),
+        description = COALESCE(?, description),
+        subscriber_count = ?,
+        video_count = ?,
+        view_count = ?,
+        country = COALESCE(?, country),
+        published_at = COALESCE(?, published_at),
+        thumbnail_url = COALESCE(?, thumbnail_url),
+        raw_json = ?,
+        last_upload_at = ?,
+        uploads_last_90d = ?,
+        median_recent_views = ?,
+        recent_velocity = ?,
+        enriched_at = CURRENT_TIMESTAMP,
+        score = ?,
+        score_breakdown = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(
+      live.handle,
+      live.title,
+      live.description,
+      live.subscriberCount,
+      live.videoCount,
+      live.viewCount,
+      live.country,
+      live.publishedAt,
+      live.thumbnailUrl,
+      live.rawJson,
+      activity.lastUploadAt,
+      activity.uploadsLast90d,
+      activity.medianRecentViews,
+      activity.recentVelocity,
+      scoring.score,
+      scoring.breakdown ? JSON.stringify(scoring.breakdown) : null,
+      input.target.channel_id,
+    ));
+  } else if (live) {
+    statements.push(env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET handle = COALESCE(?, handle),
+        title = COALESCE(?, title),
+        description = COALESCE(?, description),
+        subscriber_count = ?,
+        video_count = ?,
+        view_count = ?,
+        country = COALESCE(?, country),
+        published_at = COALESCE(?, published_at),
+        thumbnail_url = COALESCE(?, thumbnail_url),
+        raw_json = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(
+      live.handle,
+      live.title,
+      live.description,
+      live.subscriberCount,
+      live.videoCount,
+      live.viewCount,
+      live.country,
+      live.publishedAt,
+      live.thumbnailUrl,
+      live.rawJson,
+      input.target.channel_id,
+    ));
+  } else if (activity) {
+    statements.push(env.SCOUT_DB.prepare(
+      `UPDATE channels
+      SET last_upload_at = ?,
+        uploads_last_90d = ?,
+        median_recent_views = ?,
+        recent_velocity = ?,
+        enriched_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE channel_id = ?`,
+    ).bind(
+      activity.lastUploadAt,
+      activity.uploadsLast90d,
+      activity.medianRecentViews,
+      activity.recentVelocity,
+      input.target.channel_id,
+    ));
+  }
+
+  await env.SCOUT_DB.batch(statements);
+  const snapshot = await env.SCOUT_DB.prepare(
+    "SELECT id FROM snapshots WHERE job_id = ? AND channel_id = ?",
+  )
+    .bind(input.jobId, input.target.channel_id)
+    .first<{ id: number }>();
+  if (!snapshot) throw new Error("Outreach tracking snapshot was not persisted.");
+  return snapshot.id;
+}
+
+async function finishOutreachTrackingJob(
+  env: Env,
+  input: {
+    jobId: number;
+    finishedAt: string;
+    targetsConsidered: number;
+    channelsSucceeded: number;
+    channelsFailed: number;
+    channelsPartial: number;
+    channelsSnapshotted: number;
+    creditsSpent: number;
+    status: "completed" | "completed_with_errors" | "failed";
+    note: string | null;
+  },
+): Promise<void> {
+  await env.SCOUT_DB.prepare(
+    `UPDATE jobs
+    SET finished_at = ?,
+      targets_considered = ?,
+      channels_succeeded = ?,
+      channels_failed = ?,
+      channels_partial = ?,
+      channels_snapshotted = ?,
+      credits_spent = ?,
+      status = ?,
+      note = ?
+    WHERE id = ?`,
+  )
+    .bind(
+      input.finishedAt,
+      input.targetsConsidered,
+      input.channelsSucceeded,
+      input.channelsFailed,
+      input.channelsPartial,
+      input.channelsSnapshotted,
+      input.creditsSpent,
+      input.status,
+      input.note,
+      input.jobId,
+    )
+    .run();
+}
+
 function liveChannelFields(channel: ScrapeCreatorsChannel): LiveChannelFields {
   const title = normalizeUnicodeText(channel.name) ?? null;
   const description = normalizeUnicodeText(channel.description) ?? null;
@@ -5017,6 +5455,32 @@ interface SnapshotRunSummary {
   skipped_recent: number;
   truncated: number;
   credits_spent_this_run: number;
+  note: string | null;
+}
+
+interface OutreachTrackingChannelResult {
+  outcome: "success" | "partial" | "failed";
+  creditsSpent: number;
+  snapshotWritten: boolean;
+}
+
+interface OutreachTrackingCreditCounts {
+  getChannel: number;
+  getVideos: number;
+}
+
+interface OutreachTrackingRunSummary {
+  job_id: number;
+  kind: "outreach_metrics:cron" | "outreach_metrics:manual";
+  trigger: OutreachTrackingTrigger;
+  scheduled_for: string | null;
+  status: "completed" | "completed_with_errors";
+  targets_considered: number;
+  channels_succeeded: number;
+  channels_failed: number;
+  channels_partial: number;
+  channels_snapshotted: number;
+  credits_spent: number;
   note: string | null;
 }
 
@@ -5772,7 +6236,8 @@ async function growthMapForChannels(
 
   const placeholders = unique.map(() => "?").join(", ");
   const { results } = await env.SCOUT_DB.prepare(
-    `SELECT channel_id, subscriber_count, view_count, video_count, taken_at
+    `SELECT channel_id, subscriber_count, view_count, video_count,
+      median_recent_views, job_id, taken_at
     FROM snapshots
     WHERE channel_id IN (${placeholders})
     ORDER BY channel_id, taken_at`,
@@ -5787,6 +6252,8 @@ async function growthMapForChannels(
       subscriber_count: snapshot.subscriber_count,
       view_count: snapshot.view_count,
       video_count: snapshot.video_count,
+      median_recent_views: snapshot.median_recent_views,
+      job_id: snapshot.job_id,
       taken_at: snapshot.taken_at,
     });
     grouped.set(snapshot.channel_id, list);
@@ -5807,6 +6274,11 @@ function growthFields(growth?: GrowthMetrics): Record<string, unknown> {
     subs_growth_30d_days: growth?.subs_growth_30d_days ?? null,
     views_growth_30d: growth?.views_growth_30d ?? null,
     views_growth_30d_days: growth?.views_growth_30d_days ?? null,
+    median_views_growth_7d: growth?.median_views_growth_7d ?? null,
+    median_views_growth_7d_days: growth?.median_views_growth_7d_days ?? null,
+    median_views_growth_30d: growth?.median_views_growth_30d ?? null,
+    median_views_growth_30d_days: growth?.median_views_growth_30d_days ?? null,
+    median_tracking_days: growth?.median_tracking_days ?? null,
     tracking_days: growth?.tracking_days ?? null,
     first_snapshot_at: growth?.first_snapshot_at ?? null,
     latest_snapshot_at: growth?.latest_snapshot_at ?? null,

@@ -1492,6 +1492,49 @@ a:hover {
   margin-top: 2px;
 }
 
+.metric-history {
+  display: grid;
+  gap: 5px;
+}
+
+.metric-mode {
+  display: flex;
+  gap: 4px;
+}
+
+.metric-mode button {
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  background: transparent;
+  color: #789baa;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.metric-mode button[aria-pressed="true"] {
+  border-color: rgba(34, 211, 238, 0.46);
+  background: rgba(34, 211, 238, 0.1);
+  color: #bdebf2;
+}
+
+.sparkline-pending {
+  display: grid;
+  min-height: 34px;
+  place-items: center;
+  border: 1px dashed rgba(34, 211, 238, 0.14);
+  background: rgba(10, 18, 32, 0.35);
+  color: #789baa;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.sparkline-wrap.metric-views .sparkline path {
+  stroke: #a78bfa;
+}
+
 .sparkline {
   display: block;
   width: 100%;

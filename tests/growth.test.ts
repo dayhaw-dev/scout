@@ -85,3 +85,36 @@ test("growth metrics expose the honest span when history is shorter than a windo
   assert.equal(metrics.views_growth_30d_days, 6);
   assert.ok(Math.abs((metrics.subs_growth_30d ?? 0) - 0.9) < 0.001);
 });
+
+test("NULL median samples are excluded from median growth but retained for subscriber growth", () => {
+  const metrics = computeGrowthMetrics(
+    [
+      {
+        subscriber_count: 1_000,
+        view_count: 10_000,
+        median_recent_views: 100,
+        taken_at: "2026-06-30T09:00:00.000Z",
+      },
+      {
+        subscriber_count: 1_100,
+        view_count: 11_000,
+        median_recent_views: null,
+        taken_at: "2026-07-03T09:00:00.000Z",
+      },
+      {
+        subscriber_count: 1_200,
+        view_count: 12_000,
+        median_recent_views: 150,
+        taken_at: "2026-07-10T09:00:00.000Z",
+      },
+    ],
+    new Date("2026-07-10T09:00:00.000Z"),
+  );
+
+  assert.ok(Math.abs((metrics.subs_growth_7d ?? 0) - (100 / 11)) < 0.001);
+  assert.equal(metrics.subs_growth_7d_days, 7);
+  assert.equal(metrics.median_views_growth_7d, 50);
+  assert.equal(metrics.median_views_growth_7d_days, 7);
+  assert.equal(metrics.median_tracking_days, 10);
+  assert.equal(metrics.snapshots.length, 3);
+});

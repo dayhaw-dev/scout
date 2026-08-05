@@ -6,7 +6,7 @@ export const QUALITY_GATE_CONFIG = {
 } as const;
 
 export const ENRICH_CONFIG = {
-  staleAfterDays: 14,
+  staleAfterDays: 7,
   defaultLimit: 30,
   maxLimit: 100,
 } as const;

@@ -260,6 +260,7 @@ export function App() {
         {adminKey && tab === "outreach" && (
           <OutreachView
             api={api}
+            status={status}
             onError={showError}
             onToast={setToast}
             onChanged={refreshStatus}
@@ -1261,6 +1262,7 @@ function StageView({
               onToggleKind={stage !== "rejected" && stage !== "snoozed" ? () => void toggleKind(channel) : undefined}
               onToggleEmailConfirmed={() => void toggleEmailConfirmed(channel)}
               onEnrich={stage !== "rejected" && stage !== "snoozed" ? () => void enrichCard(channel) : undefined}
+              enrichmentStaleAfterDays={status?.enrichment?.stale_after_days}
               onLogOutreach={stage === "shortlist" ? () => setOutreachChannel(channel) : undefined}
               onSponsorScan={stage !== "rejected" && stage !== "snoozed" ? () => void scanSponsors(channel) : undefined}
               sponsorScan={sponsorScans[channel.channel_id]}
@@ -1295,11 +1297,13 @@ function StageView({
 
 function OutreachView({
   api,
+  status,
   onError,
   onToast,
   onChanged,
 }: {
   api: ScoutApi;
+  status: StatusPayload | null;
   onError: (error: unknown) => void;
   onToast: (toast: ToastState) => void;
   onChanged: () => void;
@@ -1682,6 +1686,7 @@ function OutreachView({
               onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
               onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
               onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+              enrichmentStaleAfterDays={status?.enrichment?.stale_after_days}
               onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
               sponsorScan={sponsorScans[channel.channel_id]}
               sponsorScanLoading={scanningSponsorId === channel.channel_id}
@@ -1709,6 +1714,7 @@ function OutreachView({
               onToggleSeed={!channel.seed_locked ? () => void toggleSeed(channel) : undefined}
               onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
               onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+              enrichmentStaleAfterDays={status?.enrichment?.stale_after_days}
               onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
               sponsorScan={sponsorScans[channel.channel_id]}
               sponsorScanLoading={scanningSponsorId === channel.channel_id}
@@ -1737,6 +1743,7 @@ function OutreachView({
                 onToggleSeed={!channel.seed_locked && channel.outreach_status === "signed" ? () => void toggleSeed(channel) : undefined}
                 onToggleEmailConfirmed={!channel.seed_locked ? () => void toggleEmailConfirmed(channel) : undefined}
                 onEnrich={!channel.seed_locked ? () => void enrichCard(channel) : undefined}
+                enrichmentStaleAfterDays={status?.enrichment?.stale_after_days}
                 onSponsorScan={!channel.seed_locked ? () => void scanSponsors(channel) : undefined}
                 onWatchSponsor={!channel.seed_locked ? () => void attachSponsorWatcher(channel) : undefined}
                 onStopWatchSponsor={!channel.seed_locked && channel.sponsor_watcher ? () => void stopSponsorWatcher(channel) : undefined}
@@ -2607,6 +2614,7 @@ function ChannelCard({
   onToggleActive,
   onRemoveFromOutreach,
   onEnrich,
+  enrichmentStaleAfterDays,
   onLogOutreach,
   onSponsorScan,
   onWatchSponsor,
@@ -2637,6 +2645,7 @@ function ChannelCard({
   onToggleActive?: () => void;
   onRemoveFromOutreach?: () => void;
   onEnrich?: () => void;
+  enrichmentStaleAfterDays?: number | null;
   onLogOutreach?: () => void;
   onSponsorScan?: () => void;
   onWatchSponsor?: () => void;
@@ -2677,7 +2686,7 @@ function ChannelCard({
     onDismissTrigger,
     watcherBusy,
     sponsorScanLoading,
-    enrichFreshDays: enrichmentFreshDays(channel),
+    enrichFreshDays: enrichmentFreshDays(channel, enrichmentStaleAfterDays),
   });
   const primaryAction = actions.find((action) => action.primary);
   const secondaryActions = actions.filter((action) => action.visibleSecondary);
@@ -3159,12 +3168,17 @@ function cardActions({
     });
   }
   if (onEnrich) {
-    const disabled = enrichFreshDays !== null && enrichFreshDays !== undefined;
+    const thresholdUnknown = enrichFreshDays === undefined;
+    const disabled = thresholdUnknown || enrichFreshDays !== null;
     actions.push({
       key: "enrich",
       label: "Enrich",
       onClick: onEnrich,
-      title: disabled ? `enriched ${enrichFreshDays}d ago` : "Enrich activity",
+      title: thresholdUnknown
+        ? "Enrichment freshness unavailable"
+        : disabled
+          ? `enriched ${enrichFreshDays}d ago`
+          : "Enrich activity",
       disabled,
     });
   }
@@ -3328,12 +3342,18 @@ function sponsorScanFresh(channel: { sponsor_scan_scanned_at?: string | null }):
   return Date.now() - scannedAt < 7 * 24 * 60 * 60 * 1000;
 }
 
-function enrichmentFreshDays(channel: { enriched_at?: string | null }): number | null {
+function enrichmentFreshDays(
+  channel: { enriched_at?: string | null },
+  staleAfterDays: number | null | undefined,
+): number | null | undefined {
+  if (typeof staleAfterDays !== "number" || !Number.isFinite(staleAfterDays) || staleAfterDays < 0) {
+    return undefined;
+  }
   if (!channel.enriched_at) return null;
   const enrichedAt = Date.parse(channel.enriched_at);
   if (Number.isNaN(enrichedAt)) return null;
   const days = Math.max(0, Math.floor((Date.now() - enrichedAt) / (24 * 60 * 60 * 1000)));
-  return days < 7 ? days : null;
+  return days < staleAfterDays ? days : null;
 }
 
 function hasMetricValue(value: number | null | undefined): value is number {

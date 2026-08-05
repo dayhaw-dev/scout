@@ -285,6 +285,9 @@ export interface StatusPayload {
   credits_remaining_updated_at: string | null;
   requests_today: number;
   requests_total: number;
+  enrichment?: {
+    stale_after_days?: number | null;
+  };
   channel_counts: {
     by_status: Record<string, number>;
     by_kind: Record<string, number>;

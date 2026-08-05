@@ -85,8 +85,8 @@ test("ui card actions use one primary action and overflow for secondary actions"
   assert.match(source, /secondary-action/);
   assert.match(source, /onEnrich=\{stage !== "rejected" && stage !== "snoozed" \? \(\) => void enrichCard\(channel\) : undefined\}/);
   assert.match(source, /onEnrich=.*enrichCard\(channel\)/);
-  assert.match(source, /enrichFreshDays: enrichmentFreshDays\(channel\)/);
-  assert.match(source, /title: disabled \? `enriched \$\{enrichFreshDays\}d ago` : "Enrich activity"/);
+  assert.match(source, /enrichFreshDays: enrichmentFreshDays\(channel, enrichmentStaleAfterDays\)/);
+  assert.match(source, /Enrichment freshness unavailable/);
   assert.match(source, /className="action-overflow"/);
   assert.match(source, /createPortal/);
   assert.match(source, /closeOnOutside/);
@@ -101,4 +101,20 @@ test("ui card actions use one primary action and overflow for secondary actions"
   assert.match(styles, /\.toggle-chip\.active/);
   assert.match(styles, /\.outreach-field/);
   assert.match(styles, /\.outreach-control/);
+});
+
+test("enrichment freshness threshold is sourced from status and fails closed when missing", () => {
+  const worker = readFileSync("src/index.ts", "utf8");
+  const config = readFileSync("src/lib/config.ts", "utf8");
+  const api = readFileSync("ui/src/api.ts", "utf8");
+  const app = readFileSync("ui/src/App.tsx", "utf8");
+
+  assert.match(config, /staleAfterDays: 7/);
+  assert.match(worker, /enrichment:\s*\{\s*stale_after_days: ENRICH_CONFIG\.staleAfterDays/);
+  assert.match(api, /enrichment\?:\s*\{\s*stale_after_days\?: number \| null/);
+  assert.match(app, /enrichmentStaleAfterDays=\{status\?\.enrichment\?\.stale_after_days\}/);
+  assert.match(app, /return days < staleAfterDays \? days : null/);
+  assert.doesNotMatch(app, /return days < 7 \? days : null/);
+  assert.match(app, /const thresholdUnknown = enrichFreshDays === undefined/);
+  assert.match(app, /const disabled = thresholdUnknown \|\| enrichFreshDays !== null/);
 });

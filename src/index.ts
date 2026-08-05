@@ -4626,6 +4626,9 @@ async function status(env: Env): Promise<Response> {
     credits_remaining_updated_at: creditsMeta?.updated_at ?? null,
     requests_today: Number(requestsToday?.count ?? 0),
     requests_total: Number(requestsTotal?.count ?? 0),
+    enrichment: {
+      stale_after_days: ENRICH_CONFIG.staleAfterDays,
+    },
     channel_counts: {
       by_status: countMap(byStatus.results, "status"),
       by_kind: countMap(byKind.results, "kind"),
